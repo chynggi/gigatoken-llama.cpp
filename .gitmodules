@@ -1,0 +1,3 @@
+[submodule "vendor/gigatoken"]
+	path = vendor/gigatoken
+	url = https://github.com/marcelroed/gigatoken.git

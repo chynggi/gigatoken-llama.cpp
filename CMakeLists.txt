@@ -118,6 +118,7 @@ option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 # 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
+option(LLAMA_GIGATOKEN  "llama: use the experimental GigaToken tokenizer backend" OFF)
 
 
 # Required for relocatable CMake package
@@ -187,6 +188,10 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
+
+if (LLAMA_GIGATOKEN)
+    include("cmake/gigatoken.cmake")
 endif()
 
 #

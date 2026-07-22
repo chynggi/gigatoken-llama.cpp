@@ -55,6 +55,15 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+if (LLAMA_GIGATOKEN)
+    target_sources(llama PRIVATE llama-gigatoken.cpp llama-gigatoken.h)
+    target_compile_definitions(llama PRIVATE LLAMA_GIGATOKEN=1)
+    if (LLAMA_BUILD_TESTS)
+        target_compile_definitions(llama PRIVATE LLAMA_GIGATOKEN_TESTS=1)
+    endif()
+    target_link_libraries(llama PRIVATE gigatoken::llama)
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)

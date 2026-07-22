@@ -7,6 +7,10 @@
 
 #include "unicode.h"
 
+#ifdef LLAMA_GIGATOKEN
+#include "llama-gigatoken.h"
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -1839,6 +1843,10 @@ struct llama_vocab::impl {
 
     std::unique_ptr<llm_tokenizer> tokenizer;
 
+#ifdef LLAMA_GIGATOKEN
+    std::unique_ptr<llama_gigatoken> gigatoken;
+#endif
+
     std::vector<char> precompiled_charsmap;
 
     impl(const llama_vocab & vocab) : vocab(vocab) {
@@ -1876,7 +1884,8 @@ struct llama_vocab::impl {
     std::vector<llama_token> tokenize(
             const std::string & raw_text,
                          bool   add_special,
-                         bool   parse_special = false) const;
+                         bool   parse_special = false,
+                         bool   use_gigatoken = true) const;
 
     int32_t tokenize(
                    const char * text,
@@ -3021,6 +3030,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
     }
+
+#ifdef LLAMA_GIGATOKEN
+    gigatoken = llama_gigatoken::create(vocab);
+#endif
 }
 
 enum llama_vocab_type llama_vocab::impl::get_type() const {
@@ -3301,7 +3314,8 @@ static std::string llama_decode_text(const std::string & text) {
 std::vector<llama_token> llama_vocab::impl::tokenize(
         const std::string & raw_text,
         bool add_special,
-        bool parse_special) const {
+        bool parse_special,
+        bool use_gigatoken) const {
     GGML_ASSERT(tokenizer && "Tokenizer not initialized. Call llama_vocab::init_tokenizer() first.");
 
     std::vector<llama_token> output;
@@ -3343,8 +3357,15 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
 #endif
                         llama_escape_whitespace(text);
-                        llm_tokenizer_spm_session session(vocab);
-                        session.tokenize(text, output);
+#ifdef LLAMA_GIGATOKEN
+                        if (use_gigatoken && gigatoken) {
+                            gigatoken->tokenize(text, output);
+                        } else
+#endif
+                        {
+                            llm_tokenizer_spm_session session(vocab);
+                            session.tokenize(text, output);
+                        }
                         is_prev_special = false;
                     } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
                         output.push_back(fragment.token);
@@ -3393,7 +3414,34 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
 #endif
-                        session->tokenize(text, output);
+#ifdef LLAMA_GIGATOKEN
+                        if (use_gigatoken && gigatoken && (pre_type == LLAMA_VOCAB_PRE_TYPE_GEMMA4 || pre_type == LLAMA_VOCAB_PRE_TYPE_SARVAM_MOE)) {
+                            size_t offset = 0;
+                            while (offset < text.size()) {
+                                const bool newline_run = text[offset] == '\n';
+                                size_t end = offset + 1;
+                                while (end < text.size() && (text[end] == '\n') == newline_run) {
+                                    ++end;
+                                }
+
+                                const std::string segment = text.substr(offset, end - offset);
+                                const llama_token newline_token = newline_run && pre_type == LLAMA_VOCAB_PRE_TYPE_GEMMA4
+                                    ? vocab.text_to_token(segment)
+                                    : LLAMA_TOKEN_NULL;
+                                if (newline_token != LLAMA_TOKEN_NULL) {
+                                    output.push_back(newline_token);
+                                } else {
+                                    gigatoken->tokenize(segment, output);
+                                }
+                                offset = end;
+                            }
+                        } else if (use_gigatoken && gigatoken) {
+                            gigatoken->tokenize(text, output);
+                        } else
+#endif
+                        {
+                            session->tokenize(text, output);
+                        }
                     } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
                         session->append(fragment.token, output);
                     }
@@ -4072,6 +4120,19 @@ std::vector<llama_token> llama_vocab::tokenize(
         bool parse_special) const {
     return pimpl->tokenize(raw_text, add_special, parse_special);
 }
+
+#ifdef LLAMA_GIGATOKEN_TESTS
+bool llama_vocab::uses_gigatoken_for_tests() const {
+    return pimpl->gigatoken != nullptr;
+}
+
+std::vector<llama_token> llama_vocab::tokenize_without_gigatoken_for_tests(
+        const std::string & raw_text,
+        bool add_special,
+        bool parse_special) const {
+    return pimpl->tokenize(raw_text, add_special, parse_special, false);
+}
+#endif
 
 const std::string & llama_vocab::token_to_piece(llama_token token) const {
     return pimpl->token_to_piece(token);

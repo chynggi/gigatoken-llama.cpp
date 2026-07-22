@@ -1,0 +1,1536 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index c7eaa08..b42094e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -9,17 +9,40 @@ license = "MIT"
+ name = "gigatoken_rs"
+ crate-type = ["cdylib", "lib"]
+ 
++[[bin]]
++name = "gigatoken"
++path = "src/main.rs"
++required-features = ["python"]
++
++[features]
++default = ["python"]
++python = [
++    "dep:arrow-array",
++    "dep:arrow-schema",
++    "dep:dashmap",
++    "dep:flate2",
++    "dep:indicatif",
++    "dep:memmap2",
++    "dep:numpy",
++    "dep:parquet",
++    "dep:priority-queue",
++    "dep:pyo3",
++    "dep:ureq",
++    "dep:zstd",
++]
++llama-cpp = []
++
+ [dependencies]
+-dashmap = "6.1"
+-indicatif = "0.18"
++dashmap = { version = "6.1", optional = true }
++indicatif = { version = "0.18", optional = true }
+ itertools = "0.15"
+-priority-queue = "2.0"
++priority-queue = { version = "2.0", optional = true }
+ # For now uses abi3-py310, should use version-specific ABI in the future
+-pyo3 = { version = "0.29", features = ["abi3-py310", "eyre"] }
+-numpy = "0.29"
++pyo3 = { version = "0.29", features = ["abi3-py310", "eyre"], optional = true }
++numpy = { version = "0.29", optional = true }
+ rayon = "1.11"
+ rustc-hash = "2.1"
+-memmap2 = { version = "0.9", features = ["stable_deref_trait"] }
++memmap2 = { version = "0.9", features = ["stable_deref_trait"], optional = true }
+ base64 = "0.22"
+ icu = { version = "2.2", features = ["compiled_data", "datagen"] }
+ eyre = "0.6.12"
+@@ -27,12 +50,12 @@ sonic-rs = "0.5.8"
+ memchr = "2.8.0"
+ aho-corasick = "1.1"
+ serde = { version = "1.0.228", features = ["derive"] }
+-flate2 = "1.1"
+-zstd = "0.13"
++flate2 = { version = "1.1", optional = true }
++zstd = { version = "0.13", optional = true }
+ spm_precompiled = "0.1.4"
+ simdutf = "0.7.0"
+ winnow = { version = "1", features = ["simd"] }
+-parquet = { version = "59.1.0", default-features = false, features = [
++parquet = { version = "59.1.0", default-features = false, optional = true, features = [
+     "arrow",
+     "snap",
+     "zstd",
+@@ -41,9 +64,9 @@ parquet = { version = "59.1.0", default-features = false, features = [
+     "brotli",
+     "flate2-rust_backend",
+ ] }
+-arrow-array = "59"
+-arrow-schema = "59"
+-ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
++arrow-array = { version = "59", optional = true }
++arrow-schema = { version = "59", optional = true }
++ureq = { version = "3.3.0", default-features = false, features = ["rustls"], optional = true }
+ 
+ # madvise/prctl on Linux (pretoken cache table, batch gather, bench THP
+ # setup); already in the tree transitively via memmap2/pyo3.
+diff --git b/include/gigatoken_llama.h b/include/gigatoken_llama.h
+new file mode 100644
+index 0000000..e342e90
+--- /dev/null
++++ b/include/gigatoken_llama.h
+@@ -0,0 +1,113 @@
++#ifndef GIGATOKEN_LLAMA_H
++#define GIGATOKEN_LLAMA_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++enum {
++    GT_LLAMA_STATUS_OK = 0,
++    GT_LLAMA_STATUS_UNSUPPORTED = 1,
++    GT_LLAMA_STATUS_INVALID_ARGUMENT = 2,
++    GT_LLAMA_STATUS_INVALID_MODEL = 3,
++    GT_LLAMA_STATUS_PANIC = 4,
++    GT_LLAMA_STATUS_INTERNAL = 5,
++};
++
++enum {
++    GT_LLAMA_TOKEN_TYPE_NORMAL = 0,
++    GT_LLAMA_TOKEN_TYPE_BYTE = 1,
++    GT_LLAMA_TOKEN_TYPE_SPECIAL = 2,
++};
++
++enum {
++    GT_LLAMA_PRETOKENIZER_GPT2 = 0,
++    GT_LLAMA_PRETOKENIZER_GPT4 = 1,
++    GT_LLAMA_PRETOKENIZER_QWEN2 = 2,
++    GT_LLAMA_PRETOKENIZER_QWEN35 = 3,
++    GT_LLAMA_PRETOKENIZER_OLMO3 = 4,
++    GT_LLAMA_PRETOKENIZER_DEEPSEEK_V3 = 5,
++    GT_LLAMA_PRETOKENIZER_O200K = 6,
++    GT_LLAMA_PRETOKENIZER_NEMOTRON = 7,
++    GT_LLAMA_PRETOKENIZER_KIMI = 8,
++};
++
++enum {
++    GT_LLAMA_BPE_FLAG_IGNORE_MERGES = 1u << 0,
++    GT_LLAMA_BPE_FLAG_VOCAB_ID_RANKS = 1u << 1,
++};
++
++enum {
++    GT_LLAMA_SPM_MERGES_FROM_SCORES = 0,
++    GT_LLAMA_SPM_MERGES_EXPLICIT = 1,
++};
++
++typedef struct gt_llama_bytes {
++    const uint8_t * data;
++    size_t len;
++} gt_llama_bytes;
++
++typedef struct gt_llama_vocab_token {
++    gt_llama_bytes text;
++    float score;
++    uint32_t token_type;
++} gt_llama_vocab_token;
++
++typedef struct gt_llama_merge {
++    uint32_t left;
++    uint32_t right;
++    uint32_t merged;
++    uint32_t rank;
++} gt_llama_merge;
++
++typedef struct gt_llama_token_buffer {
++    uint32_t * data;
++    size_t len;
++    size_t capacity;
++} gt_llama_token_buffer;
++
++typedef struct gt_llama_error {
++    uint8_t * data;
++    size_t len;
++    size_t capacity;
++} gt_llama_error;
++
++typedef struct gt_llama_tokenizer gt_llama_tokenizer;
++
++int32_t gt_llama_tokenizer_create_bpe(
++        const gt_llama_vocab_token * vocab,
++        size_t vocab_len,
++        const gt_llama_merge * merges,
++        size_t merges_len,
++        uint32_t pretokenizer,
++        uint32_t flags,
++        gt_llama_tokenizer ** out_tokenizer,
++        gt_llama_error * out_error);
++
++int32_t gt_llama_tokenizer_create_spm(
++        const gt_llama_vocab_token * vocab,
++        size_t vocab_len,
++        const gt_llama_merge * merges,
++        size_t merges_len,
++        uint32_t merge_mode,
++        gt_llama_tokenizer ** out_tokenizer,
++        gt_llama_error * out_error);
++
++int32_t gt_llama_tokenizer_encode(
++        gt_llama_tokenizer * tokenizer,
++        gt_llama_bytes input,
++        gt_llama_token_buffer * out_tokens,
++        gt_llama_error * out_error);
++
++void gt_llama_token_buffer_free(gt_llama_token_buffer * buffer);
++void gt_llama_error_free(gt_llama_error * error);
++void gt_llama_tokenizer_free(gt_llama_tokenizer * tokenizer);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/src/bpe/sentencepiece.rs b/src/bpe/sentencepiece.rs
+index aa6c611..3324e0c 100644
+--- a/src/bpe/sentencepiece.rs
++++ b/src/bpe/sentencepiece.rs
+@@ -1163,6 +1163,58 @@ impl SentencePieceBPE {
+         }
+     }
+ 
++    /// Encode text that has already gone through the caller's SentencePiece
++    /// whitespace normalization. Invalid UTF-8 bytes are emitted through the
++    /// model's byte-fallback tokens; valid input stays on the cached fast path.
++    pub fn encode_normalized_bytes_with(
++        &self,
++        state: &mut EncodeState,
++        input: &[u8],
++        out: &mut Vec<TokenId>,
++    ) -> Result<(), u8> {
++        if let Ok(text) = std::str::from_utf8(input) {
++            self.encode_normalized_cb(state, text, &mut |tokens| out.extend_from_slice(tokens));
++            return Ok(());
++        }
++
++        let mut valid_start = 0;
++        let mut offset = 0;
++        while offset < input.len() {
++            let width = match input[offset] >> 4 {
++                0..=11 => 1,
++                12..=13 => 2,
++                14 => 3,
++                _ => 4,
++            }
++            .min(input.len() - offset);
++            let end = offset + width;
++            if std::str::from_utf8(&input[offset..end]).is_err() {
++                if valid_start != offset {
++                    // SAFETY: each symbol in this range was validated above.
++                    let text =
++                        unsafe { std::str::from_utf8_unchecked(&input[valid_start..offset]) };
++                    self.encode_normalized_cb(state, text, &mut |tokens| {
++                        out.extend_from_slice(tokens)
++                    });
++                }
++                for &byte in &input[offset..end] {
++                    let Some(id) = self.byte_fallback_ids[byte as usize] else {
++                        return Err(byte);
++                    };
++                    out.push(id);
++                }
++                valid_start = end;
++            }
++            offset = end;
++        }
++        if valid_start != input.len() {
++            // SAFETY: each symbol in this range was validated above.
++            let text = unsafe { std::str::from_utf8_unchecked(&input[valid_start..]) };
++            self.encode_normalized_cb(state, text, &mut |tokens| out.extend_from_slice(tokens));
++        }
++        Ok(())
++    }
++
+     /// Split a chunk into word units and encode each through the cache.
+     ///
+     /// `raw` selects raw-mode marks (space or ▁) vs normalized-mode marks
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 7a5c12a..1d67788 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -6,12 +6,18 @@
+ //!   with chunk boundaries aligned to separator positions.
+ 
+ use memchr::memmem;
++#[cfg(feature = "python")]
+ use memmap2::Mmap;
++#[cfg(feature = "python")]
+ use std::path::Path;
+ 
++#[cfg(feature = "python")]
+ pub(crate) mod decompress;
++#[cfg(feature = "python")]
+ pub mod file_source;
++#[cfg(feature = "python")]
+ pub mod jsonl;
++#[cfg(feature = "python")]
+ pub mod parquet;
+ 
+ // ---------------------------------------------------------------------------
+@@ -111,6 +117,7 @@ impl Resource for String {
+     }
+ }
+ 
++#[cfg(feature = "python")]
+ impl Resource for Mmap {
+     fn as_bytes(&self) -> &[u8] {
+         self
+@@ -122,10 +129,12 @@ impl Resource for Mmap {
+ // ---------------------------------------------------------------------------
+ 
+ /// Owns a memory-mapped file and implements `Resource`.
++#[cfg(feature = "python")]
+ pub struct MmappedFile {
+     mmap: Mmap,
+ }
+ 
++#[cfg(feature = "python")]
+ impl MmappedFile {
+     pub fn open(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+         let file = std::fs::File::open(path)?;
+@@ -134,6 +143,7 @@ impl MmappedFile {
+     }
+ }
+ 
++#[cfg(feature = "python")]
+ impl Resource for MmappedFile {
+     fn as_bytes(&self) -> &[u8] {
+         &self.mmap
+diff --git a/src/lib.rs b/src/lib.rs
+index 11906a6..bfa7c65 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,18 +1,28 @@
+ #![feature(portable_simd)]
+ 
++#[cfg(feature = "python")]
+ pub(crate) mod batch;
++#[cfg(feature = "python")]
+ pub(crate) mod bindings;
+ pub(crate) mod bpe;
++#[cfg(feature = "python")]
+ pub(crate) mod bpe_train;
+ pub(crate) mod input;
+ pub mod pretokenize;
+ #[cfg(test)]
+ pub(crate) mod test_hub;
+ pub(crate) mod token;
++#[cfg(feature = "python")]
+ pub use crate::batch::{WorkerPool, encode_docs_ragged, sp_encode_docs_ragged};
+ pub use crate::bpe::Tokenizer;
+ pub use crate::bpe::sentencepiece::EncodeState;
+ pub mod load_tokenizer;
++#[cfg(feature = "llama-cpp")]
++pub mod llama_cpp;
++
++#[cfg(feature = "python")]
++mod python_bindings {
++use super::*;
+ 
+ use crate::batch::{
+     encode_files_docs, encode_files_docs_serial, encode_into, sp_encode_docs_ragged_serial,
+@@ -552,3 +562,4 @@ fn gigatoken_rs<'py>(py: Python, m: &Bound<'py, PyModule>) -> PyResult<()> {
+     m.add_function(wrap_pyfunction!(bindings::hub::get_hf_token, m)?)?;
+     Ok(())
+ }
++}
+diff --git b/src/llama_cpp.rs b/src/llama_cpp.rs
+new file mode 100644
+index 0000000..332fdae
+--- /dev/null
++++ b/src/llama_cpp.rs
+@@ -0,0 +1,852 @@
++use crate::bpe::sentencepiece::{EncodeState, SentencePieceBPE, WordSplit};
++use crate::bpe::tiktoken::{RankedMerges, Tokenizer};
++use crate::bpe::{ByteRemapping, ranked_merge_key};
++use crate::pretokenize::PretokenizerType;
++use crate::token::TokenId;
++use rustc_hash::FxBuildHasher;
++use std::borrow::Cow;
++use std::collections::HashMap;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++use std::ptr;
++use std::sync::{Arc, Mutex};
++
++pub const GT_LLAMA_STATUS_OK: i32 = 0;
++pub const GT_LLAMA_STATUS_UNSUPPORTED: i32 = 1;
++pub const GT_LLAMA_STATUS_INVALID_ARGUMENT: i32 = 2;
++pub const GT_LLAMA_STATUS_INVALID_MODEL: i32 = 3;
++pub const GT_LLAMA_STATUS_PANIC: i32 = 4;
++pub const GT_LLAMA_STATUS_INTERNAL: i32 = 5;
++
++pub const GT_LLAMA_TOKEN_TYPE_NORMAL: u32 = 0;
++pub const GT_LLAMA_TOKEN_TYPE_BYTE: u32 = 1;
++pub const GT_LLAMA_TOKEN_TYPE_SPECIAL: u32 = 2;
++
++pub const GT_LLAMA_PRETOKENIZER_GPT2: u32 = 0;
++pub const GT_LLAMA_PRETOKENIZER_GPT4: u32 = 1;
++pub const GT_LLAMA_PRETOKENIZER_QWEN2: u32 = 2;
++pub const GT_LLAMA_PRETOKENIZER_QWEN35: u32 = 3;
++pub const GT_LLAMA_PRETOKENIZER_OLMO3: u32 = 4;
++pub const GT_LLAMA_PRETOKENIZER_DEEPSEEK_V3: u32 = 5;
++pub const GT_LLAMA_PRETOKENIZER_O200K: u32 = 6;
++pub const GT_LLAMA_PRETOKENIZER_NEMOTRON: u32 = 7;
++pub const GT_LLAMA_PRETOKENIZER_KIMI: u32 = 8;
++
++pub const GT_LLAMA_BPE_FLAG_IGNORE_MERGES: u32 = 1 << 0;
++pub const GT_LLAMA_BPE_FLAG_VOCAB_ID_RANKS: u32 = 1 << 1;
++
++pub const GT_LLAMA_SPM_MERGES_FROM_SCORES: u32 = 0;
++pub const GT_LLAMA_SPM_MERGES_EXPLICIT: u32 = 1;
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct GtLlamaBytes {
++    pub data: *const u8,
++    pub len: usize,
++}
++
++impl GtLlamaBytes {
++    pub fn from_slice(bytes: &[u8]) -> Self {
++        Self {
++            data: bytes.as_ptr(),
++            len: bytes.len(),
++        }
++    }
++}
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct GtLlamaVocabToken {
++    pub text: GtLlamaBytes,
++    pub score: f32,
++    pub token_type: u32,
++}
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct GtLlamaMerge {
++    pub left: u32,
++    pub right: u32,
++    pub merged: u32,
++    pub rank: u32,
++}
++
++#[repr(C)]
++#[derive(Default)]
++pub struct GtLlamaTokenBuffer {
++    pub data: *mut u32,
++    pub len: usize,
++    pub capacity: usize,
++}
++
++#[repr(C)]
++#[derive(Default)]
++pub struct GtLlamaError {
++    pub data: *mut u8,
++    pub len: usize,
++    pub capacity: usize,
++}
++
++enum Model {
++    Bpe(Tokenizer),
++    Spm(SentencePieceBPE),
++}
++
++enum Worker {
++    Bpe(Tokenizer),
++    Spm(EncodeState),
++}
++
++pub struct GtLlamaTokenizer {
++    model: Model,
++    idle: Mutex<Vec<Worker>>,
++    normalize_invalid_utf8: bool,
++}
++
++struct WorkerLease<'a> {
++    owner: &'a GtLlamaTokenizer,
++    worker: Option<Worker>,
++}
++
++impl<'a> WorkerLease<'a> {
++    fn worker_mut(&mut self) -> &mut Worker {
++        self.worker.as_mut().expect("worker lease is populated")
++    }
++}
++
++impl Drop for WorkerLease<'_> {
++    fn drop(&mut self) {
++        if let Some(worker) = self.worker.take() {
++            self.owner
++                .idle
++                .lock()
++                .unwrap_or_else(|e| e.into_inner())
++                .push(worker);
++        }
++    }
++}
++
++impl GtLlamaTokenizer {
++    fn checkout(&self) -> WorkerLease<'_> {
++        let worker = self
++            .idle
++            .lock()
++            .unwrap_or_else(|e| e.into_inner())
++            .pop()
++            .unwrap_or_else(|| match &self.model {
++                Model::Bpe(tokenizer) => Worker::Bpe(tokenizer.fork()),
++                Model::Spm(_) => Worker::Spm(EncodeState::new()),
++            });
++        WorkerLease {
++            owner: self,
++            worker: Some(worker),
++        }
++    }
++}
++
++#[derive(Debug)]
++struct FfiError {
++    status: i32,
++    message: String,
++}
++
++impl FfiError {
++    fn invalid_argument(message: impl Into<String>) -> Self {
++        Self {
++            status: GT_LLAMA_STATUS_INVALID_ARGUMENT,
++            message: message.into(),
++        }
++    }
++
++    fn invalid_model(message: impl Into<String>) -> Self {
++        Self {
++            status: GT_LLAMA_STATUS_INVALID_MODEL,
++            message: message.into(),
++        }
++    }
++
++    fn unsupported(message: impl Into<String>) -> Self {
++        Self {
++            status: GT_LLAMA_STATUS_UNSUPPORTED,
++            message: message.into(),
++        }
++    }
++}
++
++fn set_error(out: *mut GtLlamaError, message: String) {
++    if out.is_null() {
++        return;
++    }
++    let mut bytes = message.into_bytes();
++    let error = if bytes.is_empty() {
++        GtLlamaError::default()
++    } else {
++        let result = GtLlamaError {
++            data: bytes.as_mut_ptr(),
++            len: bytes.len(),
++            capacity: bytes.capacity(),
++        };
++        std::mem::forget(bytes);
++        result
++    };
++    // SAFETY: the caller supplied a writable output pointer.
++    unsafe { out.write(error) };
++}
++
++fn ffi_call(error: *mut GtLlamaError, f: impl FnOnce() -> Result<(), FfiError>) -> i32 {
++    if !error.is_null() {
++        // SAFETY: the caller supplied a writable output pointer.
++        unsafe { error.write(GtLlamaError::default()) };
++    }
++    match catch_unwind(AssertUnwindSafe(|| match f() {
++        Ok(()) => GT_LLAMA_STATUS_OK,
++        Err(err) => {
++            set_error(error, err.message);
++            err.status
++        }
++    })) {
++        Ok(status) => status,
++        Err(payload) => {
++            let message = payload
++                .downcast_ref::<&str>()
++                .map(|s| (*s).to_owned())
++                .or_else(|| payload.downcast_ref::<String>().cloned())
++                .unwrap_or_else(|| "Rust panic at GigaToken FFI boundary".to_owned());
++            let _ = catch_unwind(AssertUnwindSafe(|| set_error(error, message)));
++            GT_LLAMA_STATUS_PANIC
++        }
++    }
++}
++
++unsafe fn raw_slice<'a, T>(data: *const T, len: usize, name: &str) -> Result<&'a [T], FfiError> {
++    if len == 0 {
++        return Ok(&[]);
++    }
++    if data.is_null() {
++        return Err(FfiError::invalid_argument(format!(
++            "{name} is null with non-zero length"
++        )));
++    }
++    if len > isize::MAX as usize / std::mem::size_of::<T>().max(1) {
++        return Err(FfiError::invalid_argument(format!(
++            "{name} length is too large"
++        )));
++    }
++    // SAFETY: null and length overflow were rejected; the caller owns the
++    // array for the duration of this call.
++    Ok(unsafe { std::slice::from_raw_parts(data, len) })
++}
++
++unsafe fn bytes<'a>(value: GtLlamaBytes, name: &str) -> Result<&'a [u8], FfiError> {
++    unsafe { raw_slice(value.data, value.len, name) }
++}
++
++fn byte_unicode_inverse() -> HashMap<char, u8> {
++    let allowed: Vec<u8> = (33..=126).chain(161..=172).chain(174..=255).collect();
++    let mut table = ['\0'; 256];
++    for &b in &allowed {
++        table[b as usize] = b as char;
++    }
++    let mut extra = 0u32;
++    for b in 0..=255u8 {
++        if table[b as usize] == '\0' {
++            table[b as usize] = char::from_u32(256 + extra).expect("GPT-2 byte alphabet");
++            extra += 1;
++        }
++    }
++    table
++        .iter()
++        .enumerate()
++        .map(|(b, ch)| (*ch, b as u8))
++        .collect()
++}
++
++fn decode_bpe_piece(piece: &[u8], inverse: &HashMap<char, u8>) -> Vec<u8> {
++    let Ok(text) = std::str::from_utf8(piece) else {
++        return piece.to_vec();
++    };
++    if text.chars().all(|ch| inverse.contains_key(&ch)) {
++        text.chars().map(|ch| inverse[&ch]).collect()
++    } else {
++        piece.to_vec()
++    }
++}
++
++fn push_utf8(codepoint: u32, output: &mut Vec<u8>) {
++    if codepoint <= 0x7f {
++        output.push(codepoint as u8);
++    } else if codepoint <= 0x7ff {
++        output.push(0xc0 | ((codepoint >> 6) as u8 & 0x1f));
++        output.push(0x80 | (codepoint as u8 & 0x3f));
++    } else if codepoint <= 0xffff {
++        output.push(0xe0 | ((codepoint >> 12) as u8 & 0x0f));
++        output.push(0x80 | ((codepoint >> 6) as u8 & 0x3f));
++        output.push(0x80 | (codepoint as u8 & 0x3f));
++    } else if codepoint <= 0x10ffff {
++        output.push(0xf0 | ((codepoint >> 18) as u8 & 0x07));
++        output.push(0x80 | ((codepoint >> 12) as u8 & 0x3f));
++        output.push(0x80 | ((codepoint >> 6) as u8 & 0x3f));
++        output.push(0x80 | (codepoint as u8 & 0x3f));
++    } else {
++        output.extend_from_slice(b"\xef\xbf\xbd");
++    }
++}
++
++fn normalize_llama_bpe_input(input: &[u8]) -> Cow<'_, [u8]> {
++    if std::str::from_utf8(input).is_ok() {
++        return Cow::Borrowed(input);
++    }
++
++    let mut output = Vec::with_capacity(input.len());
++    let mut offset = 0;
++    while offset < input.len() {
++        let first = input[offset];
++        let (len, mut codepoint) = if first & 0x80 == 0 {
++            (1, first as u32)
++        } else if first & 0x40 == 0 {
++            (0, 0)
++        } else if first & 0x20 == 0 {
++            (2, (first & 0x1f) as u32)
++        } else if first & 0x10 == 0 {
++            (3, (first & 0x0f) as u32)
++        } else if first & 0x08 == 0 {
++            (4, (first & 0x07) as u32)
++        } else {
++            (0, 0)
++        };
++
++        let valid = len > 0
++            && offset + len <= input.len()
++            && input[offset + 1..offset + len]
++                .iter()
++                .all(|byte| byte & 0xc0 == 0x80);
++        if !valid {
++            output.extend_from_slice(b"\xef\xbf\xbd");
++            offset += 1;
++            continue;
++        }
++
++        for byte in &input[offset + 1..offset + len] {
++            codepoint = (codepoint << 6) | (byte & 0x3f) as u32;
++        }
++        push_utf8(codepoint, &mut output);
++        offset += len;
++    }
++    Cow::Owned(output)
++}
++
++fn pretokenizer(value: u32) -> Result<PretokenizerType, FfiError> {
++    match value {
++        GT_LLAMA_PRETOKENIZER_GPT2 => Ok(PretokenizerType::GPT2),
++        GT_LLAMA_PRETOKENIZER_GPT4 => Ok(PretokenizerType::GPT4),
++        GT_LLAMA_PRETOKENIZER_QWEN2 => Ok(PretokenizerType::Qwen2),
++        GT_LLAMA_PRETOKENIZER_QWEN35 => Ok(PretokenizerType::Qwen35),
++        GT_LLAMA_PRETOKENIZER_OLMO3 => Ok(PretokenizerType::Olmo3),
++        GT_LLAMA_PRETOKENIZER_DEEPSEEK_V3 => Ok(PretokenizerType::DeepSeekV3),
++        GT_LLAMA_PRETOKENIZER_O200K => Ok(PretokenizerType::O200k),
++        GT_LLAMA_PRETOKENIZER_NEMOTRON => Ok(PretokenizerType::Nemotron),
++        GT_LLAMA_PRETOKENIZER_KIMI => Ok(PretokenizerType::Kimi),
++        _ => Err(FfiError::unsupported(format!(
++            "unsupported pretokenizer {value}"
++        ))),
++    }
++}
++
++fn validate_merge(merge: &GtLlamaMerge, vocab: &[Vec<u8>]) -> Result<(), FfiError> {
++    let get = |id: u32| {
++        vocab.get(id as usize).ok_or_else(|| {
++            FfiError::invalid_model(format!(
++                "merge references token id {id} outside the vocabulary"
++            ))
++        })
++    };
++    let left = get(merge.left)?;
++    let right = get(merge.right)?;
++    let merged = get(merge.merged)?;
++    if left.len().checked_add(right.len()) != Some(merged.len())
++        || !merged.starts_with(left)
++        || &merged[left.len()..] != right
++    {
++        return Err(FfiError::invalid_model(format!(
++            "merge ({}, {}) does not concatenate to token {}",
++            merge.left, merge.right, merge.merged
++        )));
++    }
++    Ok(())
++}
++
++unsafe fn collect_bpe_vocab(tokens: &[GtLlamaVocabToken]) -> Result<Vec<Vec<u8>>, FfiError> {
++    let inverse = byte_unicode_inverse();
++    tokens
++        .iter()
++        .enumerate()
++        .map(|(id, token)| {
++            let piece = unsafe { bytes(token.text, "vocab token") }?;
++            if piece.is_empty() {
++                return Err(FfiError::invalid_model(format!(
++                    "empty vocab token at id {id}"
++                )));
++            }
++            Ok(decode_bpe_piece(piece, &inverse))
++        })
++        .collect()
++}
++
++fn build_bpe(
++    vocab: Vec<Vec<u8>>,
++    token_types: &[u32],
++    merges: &[GtLlamaMerge],
++    scheme: PretokenizerType,
++    flags: u32,
++) -> Result<Tokenizer, FfiError> {
++    let known_flags = GT_LLAMA_BPE_FLAG_IGNORE_MERGES | GT_LLAMA_BPE_FLAG_VOCAB_ID_RANKS;
++    if flags & !known_flags != 0 {
++        return Err(FfiError::invalid_argument(format!(
++            "unknown BPE flags {:#x}",
++            flags & !known_flags
++        )));
++    }
++    let mut tokenizer = if flags & GT_LLAMA_BPE_FLAG_VOCAB_ID_RANKS != 0 {
++        let base_len = token_types
++            .iter()
++            .position(|&kind| kind == GT_LLAMA_TOKEN_TYPE_SPECIAL)
++            .unwrap_or(vocab.len());
++        if token_types[..base_len]
++            .iter()
++            .any(|&kind| kind == GT_LLAMA_TOKEN_TYPE_SPECIAL)
++            || token_types[base_len..]
++                .iter()
++                .any(|&kind| kind != GT_LLAMA_TOKEN_TYPE_SPECIAL)
++        {
++            return Err(FfiError::invalid_model(
++                "vocab-id ranks require a contiguous base vocabulary followed by special tokens",
++            ));
++        }
++        Tokenizer::from_ranks(vocab[..base_len].to_vec())
++            .map_err(|err| FfiError::invalid_model(err.to_string()))?
++    } else {
++        for merge in merges {
++            validate_merge(merge, &vocab)?;
++        }
++        let mut ordered: Vec<_> = merges.iter().collect();
++        ordered.sort_unstable_by_key(|merge| merge.rank);
++        let id_ordered = ordered
++            .windows(2)
++            .all(|pair| pair[0].merged < pair[1].merged);
++        let remapping = ByteRemapping::from_byte_vocab(&vocab)
++            .map_err(|err| FfiError::invalid_model(err.to_string()))?;
++        if id_ordered {
++            let table = merges
++                .iter()
++                .map(|m| ((TokenId(m.left), TokenId(m.right)), TokenId(m.merged)))
++                .collect::<HashMap<_, _, FxBuildHasher>>();
++            Tokenizer::new(table, vocab, remapping)
++        } else {
++            let table: RankedMerges = merges
++                .iter()
++                .map(|m| {
++                    (
++                        ranked_merge_key(TokenId(m.left), TokenId(m.right)),
++                        (TokenId(m.merged), m.rank),
++                    )
++                })
++                .collect();
++            Tokenizer::new_ranked(table, vocab, remapping)
++        }
++    };
++    tokenizer.set_pretokenizer_type(scheme);
++    tokenizer.set_ignore_merges(flags & GT_LLAMA_BPE_FLAG_IGNORE_MERGES != 0);
++    Ok(tokenizer)
++}
++
++unsafe fn collect_spm_tables(
++    tokens: &[GtLlamaVocabToken],
++) -> Result<
++    (
++        Vec<Arc<[u8]>>,
++        HashMap<Arc<[u8]>, TokenId, FxBuildHasher>,
++        [Option<TokenId>; 256],
++    ),
++    FfiError,
++> {
++    let mut vocab: Vec<Arc<[u8]>> = Vec::with_capacity(tokens.len());
++    let mut byte_ids = [None; 256];
++    for (id, token) in tokens.iter().enumerate() {
++        let text = unsafe { bytes(token.text, "vocab token") }?;
++        let piece = if token.token_type == GT_LLAMA_TOKEN_TYPE_BYTE {
++            if text.len() != 6 || !text.starts_with(b"<0x") || text[5] != b'>' {
++                return Err(FfiError::invalid_model(format!(
++                    "invalid byte token at id {id}"
++                )));
++            }
++            let hex = std::str::from_utf8(&text[3..5])
++                .map_err(|_| FfiError::invalid_model(format!("invalid byte token at id {id}")))?;
++            let byte = u8::from_str_radix(hex, 16)
++                .map_err(|_| FfiError::invalid_model(format!("invalid byte token at id {id}")))?;
++            byte_ids[byte as usize] = Some(TokenId(id as u32));
++            vec![byte]
++        } else {
++            text.to_vec()
++        };
++        if piece.is_empty() {
++            return Err(FfiError::invalid_model(format!(
++                "empty vocab token at id {id}"
++            )));
++        }
++        vocab.push(piece.into());
++    }
++    let mut inverse = HashMap::with_capacity_and_hasher(vocab.len(), FxBuildHasher);
++    for (id, piece) in vocab
++        .iter()
++        .enumerate()
++        .filter(|(id, _)| tokens[*id].token_type == GT_LLAMA_TOKEN_TYPE_BYTE)
++    {
++        inverse.insert(Arc::clone(piece), TokenId(id as u32));
++    }
++    for (id, piece) in vocab
++        .iter()
++        .enumerate()
++        .filter(|(id, _)| tokens[*id].token_type != GT_LLAMA_TOKEN_TYPE_BYTE)
++    {
++        inverse.insert(Arc::clone(piece), TokenId(id as u32));
++    }
++    Ok((vocab, inverse, byte_ids))
++}
++
++fn score_merges(
++    tokens: &[GtLlamaVocabToken],
++    vocab: &[Arc<[u8]>],
++    inverse: &HashMap<Arc<[u8]>, TokenId, FxBuildHasher>,
++) -> Result<HashMap<u64, (TokenId, u32), FxBuildHasher>, FfiError> {
++    struct Candidate {
++        score: f32,
++        left_chars: usize,
++        right_chars: usize,
++        merged: TokenId,
++        left: TokenId,
++        right: TokenId,
++    }
++    let mut candidates = Vec::new();
++    for (id, token) in tokens.iter().enumerate() {
++        if token.token_type != GT_LLAMA_TOKEN_TYPE_NORMAL {
++            continue;
++        }
++        if !token.score.is_finite() {
++            return Err(FfiError::invalid_model(format!(
++                "non-finite score at token id {id}"
++            )));
++        }
++        let Ok(text) = std::str::from_utf8(&vocab[id]) else {
++            continue;
++        };
++        for split in text.char_indices().skip(1).map(|(offset, _)| offset) {
++            let Some(&left) = inverse.get(&vocab[id][..split]) else {
++                continue;
++            };
++            let Some(&right) = inverse.get(&vocab[id][split..]) else {
++                continue;
++            };
++            candidates.push(Candidate {
++                score: token.score,
++                left_chars: text[..split].chars().count(),
++                right_chars: text[split..].chars().count(),
++                merged: TokenId(id as u32),
++                left,
++                right,
++            });
++        }
++    }
++    candidates.sort_by(|a, b| {
++        b.score
++            .total_cmp(&a.score)
++            .then_with(|| b.left_chars.cmp(&a.left_chars))
++            .then_with(|| b.right_chars.cmp(&a.right_chars))
++            .then_with(|| a.merged.0.cmp(&b.merged.0))
++            .then_with(|| a.left.0.cmp(&b.left.0))
++            .then_with(|| a.right.0.cmp(&b.right.0))
++    });
++    let mut result = HashMap::with_capacity_and_hasher(candidates.len(), FxBuildHasher);
++    for (rank, candidate) in candidates.into_iter().enumerate() {
++        result
++            .entry(ranked_merge_key(candidate.left, candidate.right))
++            .or_insert((candidate.merged, rank as u32));
++    }
++    Ok(result)
++}
++
++fn explicit_spm_merges(
++    merges: &[GtLlamaMerge],
++    vocab: &[Arc<[u8]>],
++) -> Result<HashMap<u64, (TokenId, u32), FxBuildHasher>, FfiError> {
++    let owned: Vec<Vec<u8>> = vocab.iter().map(|piece| piece.to_vec()).collect();
++    let mut result = HashMap::with_capacity_and_hasher(merges.len(), FxBuildHasher);
++    for merge in merges {
++        validate_merge(merge, &owned)?;
++        result
++            .entry(ranked_merge_key(TokenId(merge.left), TokenId(merge.right)))
++            .or_insert((TokenId(merge.merged), merge.rank));
++    }
++    Ok(result)
++}
++
++fn build_spm(
++    tokens: &[GtLlamaVocabToken],
++    vocab: Vec<Arc<[u8]>>,
++    inverse: HashMap<Arc<[u8]>, TokenId, FxBuildHasher>,
++    byte_ids: [Option<TokenId>; 256],
++    merges: &[GtLlamaMerge],
++    merge_mode: u32,
++) -> Result<SentencePieceBPE, FfiError> {
++    let merges = match merge_mode {
++        GT_LLAMA_SPM_MERGES_FROM_SCORES => score_merges(tokens, &vocab, &inverse)?,
++        GT_LLAMA_SPM_MERGES_EXPLICIT => explicit_spm_merges(merges, &vocab)?,
++        _ => {
++            return Err(FfiError::unsupported(format!(
++                "unsupported SentencePiece merge mode {merge_mode}"
++            )));
++        }
++    };
++    let mut tokenizer = SentencePieceBPE {
++        merges,
++        vocab,
++        vocab_inv: inverse,
++        byte_fallback_ids: byte_ids,
++        added_tokens: Vec::new(),
++        norm_added_tokens: Vec::new(),
++        norm_ops: Vec::new(),
++        metaspace: None,
++        word_split: WordSplit::None,
++        raw_prepend: None,
++        space_init: Vec::new(),
++        ascii_init: [None; 128],
++        added_matcher: None,
++        split_bytes: [0; crate::bpe::sentencepiece::NUM_SPLIT_BYTES],
++        split_safe: Vec::new(),
++        cross_pieces: Vec::new(),
++        cross_prev: [0; 4],
++    };
++    tokenizer.finalize_speed_paths();
++    Ok(tokenizer)
++}
++
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn gt_llama_tokenizer_create_bpe(
++    vocab: *const GtLlamaVocabToken,
++    vocab_len: usize,
++    merges: *const GtLlamaMerge,
++    merges_len: usize,
++    scheme: u32,
++    flags: u32,
++    out_tokenizer: *mut *mut GtLlamaTokenizer,
++    out_error: *mut GtLlamaError,
++) -> i32 {
++    if !out_tokenizer.is_null() {
++        // SAFETY: checked non-null output pointer.
++        unsafe { out_tokenizer.write(ptr::null_mut()) };
++    }
++    ffi_call(out_error, || {
++        if out_tokenizer.is_null() {
++            return Err(FfiError::invalid_argument("out_tokenizer is null"));
++        }
++        let tokens = unsafe { raw_slice(vocab, vocab_len, "vocab") }?;
++        let merges = unsafe { raw_slice(merges, merges_len, "merges") }?;
++        if tokens.is_empty() {
++            return Err(FfiError::invalid_model("vocabulary is empty"));
++        }
++        let scheme = pretokenizer(scheme)?;
++        let pieces = unsafe { collect_bpe_vocab(tokens) }?;
++        let types: Vec<u32> = tokens.iter().map(|token| token.token_type).collect();
++        let tokenizer = build_bpe(pieces, &types, merges, scheme, flags)?;
++        let handle = Box::new(GtLlamaTokenizer {
++            model: Model::Bpe(tokenizer),
++            idle: Mutex::new(Vec::new()),
++            normalize_invalid_utf8: true,
++        });
++        // SAFETY: checked non-null output pointer; ownership transfers to C.
++        unsafe { out_tokenizer.write(Box::into_raw(handle)) };
++        Ok(())
++    })
++}
++
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn gt_llama_tokenizer_create_spm(
++    vocab: *const GtLlamaVocabToken,
++    vocab_len: usize,
++    merges: *const GtLlamaMerge,
++    merges_len: usize,
++    merge_mode: u32,
++    out_tokenizer: *mut *mut GtLlamaTokenizer,
++    out_error: *mut GtLlamaError,
++) -> i32 {
++    if !out_tokenizer.is_null() {
++        // SAFETY: checked non-null output pointer.
++        unsafe { out_tokenizer.write(ptr::null_mut()) };
++    }
++    ffi_call(out_error, || {
++        if out_tokenizer.is_null() {
++            return Err(FfiError::invalid_argument("out_tokenizer is null"));
++        }
++        let tokens = unsafe { raw_slice(vocab, vocab_len, "vocab") }?;
++        let merges = unsafe { raw_slice(merges, merges_len, "merges") }?;
++        if tokens.is_empty() {
++            return Err(FfiError::invalid_model("vocabulary is empty"));
++        }
++        let (pieces, inverse, byte_ids) = unsafe { collect_spm_tables(tokens) }?;
++        let tokenizer = build_spm(tokens, pieces, inverse, byte_ids, merges, merge_mode)?;
++        let handle = Box::new(GtLlamaTokenizer {
++            model: Model::Spm(tokenizer),
++            idle: Mutex::new(Vec::new()),
++            normalize_invalid_utf8: merge_mode == GT_LLAMA_SPM_MERGES_EXPLICIT,
++        });
++        // SAFETY: checked non-null output pointer; ownership transfers to C.
++        unsafe { out_tokenizer.write(Box::into_raw(handle)) };
++        Ok(())
++    })
++}
++
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn gt_llama_tokenizer_encode(
++    tokenizer: *mut GtLlamaTokenizer,
++    input: GtLlamaBytes,
++    out_tokens: *mut GtLlamaTokenBuffer,
++    out_error: *mut GtLlamaError,
++) -> i32 {
++    if !out_tokens.is_null() {
++        // SAFETY: checked non-null output pointer.
++        unsafe { out_tokens.write(GtLlamaTokenBuffer::default()) };
++    }
++    ffi_call(out_error, || {
++        if tokenizer.is_null() {
++            return Err(FfiError::invalid_argument("tokenizer is null"));
++        }
++        if out_tokens.is_null() {
++            return Err(FfiError::invalid_argument("out_tokens is null"));
++        }
++        let input = unsafe { bytes(input, "input") }?;
++        // SAFETY: the handle remains owned by the caller for this call.
++        let tokenizer = unsafe { &*tokenizer };
++        let input = if tokenizer.normalize_invalid_utf8 {
++            normalize_llama_bpe_input(input)
++        } else {
++            Cow::Borrowed(input)
++        };
++        let mut lease = tokenizer.checkout();
++        let mut ids = Vec::new();
++        match (&tokenizer.model, lease.worker_mut()) {
++            (Model::Bpe(_), Worker::Bpe(worker)) => {
++                worker.encode_with_added_tokens_flat(&input, &mut ids)
++            }
++            (Model::Spm(model), Worker::Spm(state)) => {
++                let mut tokens = Vec::new();
++                model
++                    .encode_normalized_bytes_with(state, &input, &mut tokens)
++                    .map_err(|byte| {
++                        FfiError::invalid_model(format!(
++                            "missing byte-fallback token for {byte:#04x}"
++                        ))
++                    })?;
++                ids.extend(tokens.into_iter().map(u32::from));
++            }
++            _ => {
++                return Err(FfiError {
++                    status: GT_LLAMA_STATUS_INTERNAL,
++                    message: "worker/model type mismatch".to_owned(),
++                });
++            }
++        }
++        let buffer = if ids.is_empty() {
++            GtLlamaTokenBuffer::default()
++        } else {
++            let buffer = GtLlamaTokenBuffer {
++                data: ids.as_mut_ptr(),
++                len: ids.len(),
++                capacity: ids.capacity(),
++            };
++            std::mem::forget(ids);
++            buffer
++        };
++        // SAFETY: checked non-null output pointer; ownership transfers to C.
++        unsafe { out_tokens.write(buffer) };
++        Ok(())
++    })
++}
++
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn gt_llama_token_buffer_free(buffer: *mut GtLlamaTokenBuffer) {
++    let _ = catch_unwind(AssertUnwindSafe(|| {
++        if buffer.is_null() {
++            return;
++        }
++        // SAFETY: checked non-null pointer and the API requires a buffer returned by this crate.
++        let buffer = unsafe { &mut *buffer };
++        if !buffer.data.is_null() {
++            // SAFETY: data/len/capacity came from Vec::into_raw_parts equivalent above.
++            unsafe {
++                drop(Vec::from_raw_parts(
++                    buffer.data,
++                    buffer.len,
++                    buffer.capacity,
++                ))
++            };
++        }
++        *buffer = GtLlamaTokenBuffer::default();
++    }));
++}
++
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn gt_llama_error_free(error: *mut GtLlamaError) {
++    let _ = catch_unwind(AssertUnwindSafe(|| {
++        if error.is_null() {
++            return;
++        }
++        // SAFETY: checked non-null pointer and the API requires an error returned by this crate.
++        let error = unsafe { &mut *error };
++        if !error.data.is_null() {
++            // SAFETY: data/len/capacity came from Vec::into_raw_parts equivalent in set_error.
++            unsafe { drop(Vec::from_raw_parts(error.data, error.len, error.capacity)) };
++        }
++        *error = GtLlamaError::default();
++    }));
++}
++
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn gt_llama_tokenizer_free(tokenizer: *mut GtLlamaTokenizer) {
++    let _ = catch_unwind(AssertUnwindSafe(|| {
++        if !tokenizer.is_null() {
++            // SAFETY: the pointer came from Box::into_raw in a create function and is freed once.
++            unsafe { drop(Box::from_raw(tokenizer)) };
++        }
++    }));
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::borrow::Cow;
++
++    #[test]
++    fn normalizes_invalid_utf8_like_llama_cpp() {
++        let valid = b"valid \xf0\x9f\xa6\x99";
++        assert!(matches!(normalize_llama_bpe_input(valid), Cow::Borrowed(_)));
++        assert_eq!(
++            normalize_llama_bpe_input(b"\xf0\x28\x8c\x28\xff").as_ref(),
++            b"\xef\xbf\xbd\x28\xef\xbf\xbd\x28\xef\xbf\xbd",
++        );
++        assert_eq!(
++            normalize_llama_bpe_input(b"\xe2\x82").as_ref(),
++            b"\xef\xbf\xbd\xef\xbf\xbd"
++        );
++        assert_eq!(normalize_llama_bpe_input(b"\xc0\x80").as_ref(), b"\0");
++    }
++
++    #[test]
++    fn panic_is_caught_at_the_boundary() {
++        let mut error = GtLlamaError::default();
++        let status = ffi_call(&mut error, || -> Result<(), FfiError> {
++            panic!("caught panic")
++        });
++        assert_eq!(status, GT_LLAMA_STATUS_PANIC);
++        let text = unsafe { std::slice::from_raw_parts(error.data, error.len) };
++        assert_eq!(text, b"caught panic");
++        unsafe { gt_llama_error_free(&mut error) };
++    }
++}
+diff --git a/src/load_tokenizer/mod.rs b/src/load_tokenizer/mod.rs
+index 4a872de..483b116 100644
+--- a/src/load_tokenizer/mod.rs
++++ b/src/load_tokenizer/mod.rs
+@@ -1,3 +1,4 @@
+ pub mod hf;
++#[cfg(feature = "python")]
+ pub mod hub;
+ pub mod tiktoken;
+diff --git a/src/pretokenize/fast/olmo3.rs b/src/pretokenize/fast/olmo3.rs
+index 5e7f465..92e5bbb 100644
+--- a/src/pretokenize/fast/olmo3.rs
++++ b/src/pretokenize/fast/olmo3.rs
+@@ -435,6 +435,7 @@ mod tests {
+     /// safe because both sides tokenize the identical chunk. Run with:
+     /// `cargo test --release olmo3_matches_regex_owt_full -- --ignored --nocapture`
+     #[test]
++    #[cfg(feature = "python")]
+     #[ignore = "reads the full ~12 GB OWT file; run explicitly in release mode"]
+     fn olmo3_matches_regex_owt_full() {
+         use rayon::prelude::*;
+diff --git a/src/test_hub.rs b/src/test_hub.rs
+index 35442be..7a65600 100644
+--- a/src/test_hub.rs
++++ b/src/test_hub.rs
+@@ -10,7 +10,15 @@ use std::path::PathBuf;
+ /// `filename` from a model repo's `main` snapshot in the local HF cache,
+ /// or None when the repo, ref, or file is not cached.
+ pub(crate) fn cached_hub_file(repo_id: &str, filename: &str) -> Option<PathBuf> {
+-    crate::load_tokenizer::hub::cached_hub_file(repo_id, filename, "main")
++    #[cfg(feature = "python")]
++    {
++        return crate::load_tokenizer::hub::cached_hub_file(repo_id, filename, "main");
++    }
++    #[cfg(not(feature = "python"))]
++    {
++        let _ = (repo_id, filename);
++        None
++    }
+ }
+ 
+ /// A model repo's tokenizer.json from the local HF cache.
+diff --git b/tests/llama_cpp_ffi.rs b/tests/llama_cpp_ffi.rs
+new file mode 100644
+index 0000000..03183d1
+--- /dev/null
++++ b/tests/llama_cpp_ffi.rs
+@@ -0,0 +1,278 @@
++#![cfg(feature = "llama-cpp")]
++
++use gigatoken_rs::llama_cpp::*;
++use std::ptr;
++
++fn byte_to_unicode() -> [char; 256] {
++    let allowed: Vec<u8> = (33..=126).chain(161..=172).chain(174..=255).collect();
++    let mut table = ['\0'; 256];
++    for &b in &allowed {
++        table[b as usize] = b as char;
++    }
++    let mut extra = 0u32;
++    for b in 0..=255u8 {
++        if table[b as usize] == '\0' {
++            table[b as usize] = char::from_u32(256 + extra).unwrap();
++            extra += 1;
++        }
++    }
++    table
++}
++
++struct VocabFixture {
++    storage: Vec<Vec<u8>>,
++    entries: Vec<GtLlamaVocabToken>,
++}
++
++impl VocabFixture {
++    fn bpe(extra: &[&[u8]]) -> Self {
++        let byte_chars = byte_to_unicode();
++        let mut storage: Vec<Vec<u8>> = byte_chars
++            .iter()
++            .map(|ch| ch.to_string().into_bytes())
++            .collect();
++        storage.extend(extra.iter().map(|piece| piece.to_vec()));
++        let entries = storage
++            .iter()
++            .map(|piece| GtLlamaVocabToken {
++                text: GtLlamaBytes::from_slice(piece),
++                score: 0.0,
++                token_type: GT_LLAMA_TOKEN_TYPE_NORMAL,
++            })
++            .collect();
++        Self { storage, entries }
++    }
++
++    fn spm(extra: &[(&[u8], f32)]) -> Self {
++        let mut storage: Vec<Vec<u8>> = (0..=255u8)
++            .map(|b| format!("<0x{b:02X}>").into_bytes())
++            .collect();
++        storage.extend(extra.iter().map(|(piece, _)| piece.to_vec()));
++        let mut entries: Vec<GtLlamaVocabToken> = storage
++            .iter()
++            .take(256)
++            .map(|piece| GtLlamaVocabToken {
++                text: GtLlamaBytes::from_slice(piece),
++                score: 0.0,
++                token_type: GT_LLAMA_TOKEN_TYPE_BYTE,
++            })
++            .collect();
++        entries.extend(
++            storage
++                .iter()
++                .skip(256)
++                .zip(extra)
++                .map(|(piece, (_, score))| GtLlamaVocabToken {
++                    text: GtLlamaBytes::from_slice(piece),
++                    score: *score,
++                    token_type: GT_LLAMA_TOKEN_TYPE_NORMAL,
++                }),
++        );
++        Self { storage, entries }
++    }
++
++    fn as_slice(&self) -> &[GtLlamaVocabToken] {
++        let _ = &self.storage;
++        &self.entries
++    }
++}
++
++unsafe fn take_error(mut error: GtLlamaError) -> String {
++    let text = if error.data.is_null() {
++        String::new()
++    } else {
++        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(error.data, error.len) })
++            .into_owned()
++    };
++    unsafe { gt_llama_error_free(&mut error) };
++    text
++}
++
++unsafe fn encode(handle: *mut GtLlamaTokenizer, input: &[u8]) -> Result<Vec<u32>, String> {
++    let mut tokens = GtLlamaTokenBuffer::default();
++    let mut error = GtLlamaError::default();
++    let status = unsafe {
++        gt_llama_tokenizer_encode(
++            handle,
++            GtLlamaBytes::from_slice(input),
++            &mut tokens,
++            &mut error,
++        )
++    };
++    if status != GT_LLAMA_STATUS_OK {
++        return Err(unsafe { take_error(error) });
++    }
++    let result = unsafe { std::slice::from_raw_parts(tokens.data, tokens.len) }.to_vec();
++    unsafe { gt_llama_token_buffer_free(&mut tokens) };
++    Ok(result)
++}
++
++#[test]
++fn bpe_explicit_ranks_encode_and_own_the_result_buffer() {
++    let vocab = VocabFixture::bpe(&[b"ab", b"abc"]);
++    let merges = [
++        GtLlamaMerge {
++            left: b'a' as u32,
++            right: b'b' as u32,
++            merged: 256,
++            rank: 1,
++        },
++        GtLlamaMerge {
++            left: 256,
++            right: b'c' as u32,
++            merged: 257,
++            rank: 0,
++        },
++    ];
++    let mut handle = ptr::null_mut();
++    let mut error = GtLlamaError::default();
++    let status = unsafe {
++        gt_llama_tokenizer_create_bpe(
++            vocab.as_slice().as_ptr(),
++            vocab.as_slice().len(),
++            merges.as_ptr(),
++            merges.len(),
++            GT_LLAMA_PRETOKENIZER_GPT2,
++            0,
++            &mut handle,
++            &mut error,
++        )
++    };
++    assert_eq!(status, GT_LLAMA_STATUS_OK, "{}", unsafe {
++        take_error(error)
++    });
++    assert_eq!(unsafe { encode(handle, b"abc") }.unwrap(), vec![257]);
++    unsafe { gt_llama_tokenizer_free(handle) };
++}
++
++#[test]
++fn kimi_vocab_ranks_leave_special_partitioning_to_llama_cpp() {
++    let mut vocab = VocabFixture::bpe(&[b"ab", b"<special>"]);
++    vocab.entries[257].token_type = GT_LLAMA_TOKEN_TYPE_SPECIAL;
++    let mut handle = ptr::null_mut();
++    let mut error = GtLlamaError::default();
++    let status = unsafe {
++        gt_llama_tokenizer_create_bpe(
++            vocab.as_slice().as_ptr(),
++            vocab.as_slice().len(),
++            ptr::null(),
++            0,
++            GT_LLAMA_PRETOKENIZER_KIMI,
++            GT_LLAMA_BPE_FLAG_VOCAB_ID_RANKS,
++            &mut handle,
++            &mut error,
++        )
++    };
++    assert_eq!(status, GT_LLAMA_STATUS_OK, "{}", unsafe {
++        take_error(error)
++    });
++    assert_eq!(unsafe { encode(handle, b"ab") }.unwrap(), vec![256]);
++    assert_eq!(
++        unsafe { encode(handle, b"<special>") }.unwrap(),
++        b"<special>"
++            .iter()
++            .map(|&byte| byte as u32)
++            .collect::<Vec<_>>()
++    );
++    unsafe { gt_llama_tokenizer_free(handle) };
++}
++
++#[test]
++fn spm_recovers_score_ranked_merges_and_handles_invalid_utf8() {
++    let vocab = VocabFixture::spm(&[
++        (b"a", 0.0),
++        (b"b", 0.0),
++        (b"c", 0.0),
++        (b"ab", 1.0),
++        (b"abc", 2.0),
++    ]);
++    let mut handle = ptr::null_mut();
++    let mut error = GtLlamaError::default();
++    let status = unsafe {
++        gt_llama_tokenizer_create_spm(
++            vocab.as_slice().as_ptr(),
++            vocab.as_slice().len(),
++            ptr::null(),
++            0,
++            GT_LLAMA_SPM_MERGES_FROM_SCORES,
++            &mut handle,
++            &mut error,
++        )
++    };
++    assert_eq!(status, GT_LLAMA_STATUS_OK, "{}", unsafe {
++        take_error(error)
++    });
++    assert_eq!(unsafe { encode(handle, b"abc") }.unwrap(), vec![260]);
++    assert_eq!(unsafe { encode(handle, &[0xFF]) }.unwrap(), vec![255]);
++    assert_eq!(
++        unsafe { encode(handle, &[0xF0, b'a', b'b', b'c']) }.unwrap(),
++        vec![240, 97, 98, 99]
++    );
++    unsafe { gt_llama_tokenizer_free(handle) };
++}
++
++#[test]
++fn encode_uses_independent_workers_across_threads() {
++    let vocab = VocabFixture::bpe(&[b"ab"]);
++    let merges = [GtLlamaMerge {
++        left: b'a' as u32,
++        right: b'b' as u32,
++        merged: 256,
++        rank: 0,
++    }];
++    let mut handle = ptr::null_mut();
++    let mut error = GtLlamaError::default();
++    assert_eq!(
++        unsafe {
++            gt_llama_tokenizer_create_bpe(
++                vocab.as_slice().as_ptr(),
++                vocab.as_slice().len(),
++                merges.as_ptr(),
++                merges.len(),
++                GT_LLAMA_PRETOKENIZER_GPT2,
++                0,
++                &mut handle,
++                &mut error,
++            )
++        },
++        GT_LLAMA_STATUS_OK,
++        "{}",
++        unsafe { take_error(error) }
++    );
++    let shared = handle as usize;
++    let threads: Vec<_> = (0..8)
++        .map(|_| {
++            std::thread::spawn(move || {
++                for _ in 0..100 {
++                    assert_eq!(
++                        unsafe { encode(shared as *mut GtLlamaTokenizer, b"ab ab") }.unwrap(),
++                        vec![256, 32, 256]
++                    );
++                }
++            })
++        })
++        .collect();
++    for thread in threads {
++        thread.join().unwrap();
++    }
++    unsafe { gt_llama_tokenizer_free(handle) };
++}
++
++#[test]
++fn invalid_arguments_return_an_owned_error() {
++    let mut tokens = GtLlamaTokenBuffer::default();
++    let mut error = GtLlamaError::default();
++    let status = unsafe {
++        gt_llama_tokenizer_encode(
++            ptr::null_mut(),
++            GtLlamaBytes {
++                data: ptr::null(),
++                len: 1,
++            },
++            &mut tokens,
++            &mut error,
++        )
++    };
++    assert_eq!(status, GT_LLAMA_STATUS_INVALID_ARGUMENT);
++    assert!(unsafe { take_error(error) }.contains("tokenizer"));
++}

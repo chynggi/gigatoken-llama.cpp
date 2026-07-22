@@ -172,6 +172,15 @@ struct llama_vocab {
                          bool   add_special,
                          bool   parse_special = false) const;
 
+#ifdef LLAMA_GIGATOKEN_TESTS
+    LLAMA_API bool uses_gigatoken_for_tests() const;
+
+    LLAMA_API std::vector<llama_token> tokenize_without_gigatoken_for_tests(
+            const std::string & raw_text,
+                         bool   add_special,
+                         bool   parse_special = false) const;
+#endif
+
     // does not write null-terminator to buf
     int32_t token_to_piece(
                   llama_token   token,

@@ -135,6 +135,41 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-qwen35            ARGS ${PROJE
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-refact            ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-refact.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-starcoder.gguf)
 
+if (LLAMA_GIGATOKEN)
+    llama_build(test-gigatoken.cpp)
+    target_include_directories(test-gigatoken PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_definitions(test-gigatoken PRIVATE LLAMA_GIGATOKEN_TESTS=1)
+
+    llama_test(test-gigatoken NAME test-gigatoken-matrix)
+    llama_test(test-gigatoken NAME test-gigatoken-gpt-2
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf enabled long)
+    llama_test(test-gigatoken NAME test-gigatoken-llama-bpe
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf enabled)
+    llama_test(test-gigatoken NAME test-gigatoken-llama-spm
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-spm.gguf enabled long)
+    llama_test(test-gigatoken NAME test-gigatoken-mpt
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-mpt.gguf enabled)
+    llama_test(test-gigatoken NAME test-gigatoken-qwen2
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-qwen2.gguf enabled)
+    llama_test(test-gigatoken NAME test-gigatoken-qwen35
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-qwen35.gguf enabled)
+    llama_test(test-gigatoken NAME test-gigatoken-deepseek-v3
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf enabled pre=deepseek-v3)
+    llama_test(test-gigatoken NAME test-gigatoken-gpt-4o
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf enabled pre=gpt-4o)
+    llama_test(test-gigatoken NAME test-gigatoken-kimi-k2
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf enabled pre=kimi-k2)
+    llama_test(test-gigatoken NAME test-gigatoken-gemma-4
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gemma-4.gguf enabled)
+    llama_test(test-gigatoken NAME test-gigatoken-bert-fallback
+        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-bert-bge.gguf disabled)
+endif()
+
+if (WIN32)
+    llama_build(gigatoken-bench.cpp)
+    target_link_libraries(gigatoken-bench PRIVATE psapi)
+endif()
+
 if (NOT WIN32)
     llama_test_cmd(
         ${CMAKE_CURRENT_SOURCE_DIR}/test-tokenizers-repo.sh

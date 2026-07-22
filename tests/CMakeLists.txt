@@ -136,6 +136,9 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-refact            ARGS ${PROJE
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-starcoder.gguf)
 
 if (LLAMA_GIGATOKEN)
+    set(LLAMA_GIGATOKEN_FIXTURE_DIR "${PROJECT_SOURCE_DIR}/../fixtures/gguf" CACHE PATH
+        "Directory containing real-model vocab-only GGUF fixtures")
+
     llama_build(test-gigatoken.cpp)
     target_include_directories(test-gigatoken PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(test-gigatoken PRIVATE LLAMA_GIGATOKEN_TESTS=1)
@@ -154,11 +157,11 @@ if (LLAMA_GIGATOKEN)
     llama_test(test-gigatoken NAME test-gigatoken-qwen35
         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-qwen35.gguf enabled)
     llama_test(test-gigatoken NAME test-gigatoken-deepseek-v3
-        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf enabled pre=deepseek-v3)
-    llama_test(test-gigatoken NAME test-gigatoken-gpt-4o
-        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf enabled pre=gpt-4o)
-    llama_test(test-gigatoken NAME test-gigatoken-kimi-k2
-        ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf enabled pre=kimi-k2)
+        ARGS ${LLAMA_GIGATOKEN_FIXTURE_DIR}/ggml-vocab-deepseek-v3.gguf enabled)
+    llama_test(test-gigatoken NAME test-gigatoken-gpt-oss
+        ARGS ${LLAMA_GIGATOKEN_FIXTURE_DIR}/ggml-vocab-gpt-oss-120b.gguf enabled)
+    llama_test(test-gigatoken NAME test-gigatoken-kimi-k2.7-code
+        ARGS ${LLAMA_GIGATOKEN_FIXTURE_DIR}/ggml-vocab-kimi-k2.7-code.gguf enabled)
     llama_test(test-gigatoken NAME test-gigatoken-gemma-4
         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gemma-4.gguf enabled)
     llama_test(test-gigatoken NAME test-gigatoken-bert-fallback

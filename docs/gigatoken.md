@@ -75,6 +75,16 @@ tables fails model loading; an unexpected runtime ABI error fails fast.
 
 ## Correctness tests
 
+The DeepSeek V3, GPT-OSS, and Kimi K2.7 tests use real-model vocab-only
+fixtures. By default CMake reads them from `../fixtures/gguf`:
+
+- `ggml-vocab-deepseek-v3.gguf`
+- `ggml-vocab-gpt-oss-120b.gguf`
+- `ggml-vocab-kimi-k2.7-code.gguf`
+
+Set `LLAMA_GIGATOKEN_FIXTURE_DIR` at configure time when the fixtures are
+stored elsewhere.
+
 Run the upstream tokenizer fixtures with GigaToken disabled:
 
 ```powershell

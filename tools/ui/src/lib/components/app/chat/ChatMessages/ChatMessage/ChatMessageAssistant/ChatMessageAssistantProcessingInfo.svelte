@@ -10,7 +10,7 @@
 
 	let { modelLoadingText, processingState, position }: Props = $props();
 
-	const marginClass = position === 'top' ? 'mt-6' : 'mt-4';
+	const marginClass = $derived(position === 'top' ? 'mt-6' : 'mt-4');
 </script>
 
 <div class="{marginClass} w-full max-w-3xl" in:fade>

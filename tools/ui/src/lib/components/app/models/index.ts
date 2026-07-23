@@ -102,6 +102,15 @@ export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';
 export { default as ModelBadge } from './ModelBadge.svelte';
 
 /**
+ * **ModelLogo** - Architecture/provider logo for assistant replies
+ *
+ * Infers the model family from the local model id/path (and optional chat
+ * template hints) and loads a matching logo from a public CDN. Falls back
+ * to a package icon when the family is unknown or the image fails to load.
+ */
+export { default as ModelLogo } from './ModelLogo.svelte';
+
+/**
  * **ModelId** - Parsed model identifier display
  *
  * Displays a model ID with optional org name, parameter badges, quantization,

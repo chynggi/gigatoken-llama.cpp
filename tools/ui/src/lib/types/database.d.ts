@@ -16,6 +16,80 @@ export interface DatabaseConversation {
 	reasoningEffort?: ReasoningEffort;
 	forkedFromConversationId?: string;
 	pinned?: boolean;
+	/** Folder ID for organization */
+	folderId?: string;
+	/** Tags for filtering */
+	tags?: string[];
+	/** Whether conversation is archived */
+	archived?: boolean;
+}
+
+/** Folder for organizing conversations */
+export interface DatabaseFolder {
+	id: string;
+	name: string;
+	color?: string;
+	order: number;
+	createdAt: number;
+}
+
+/** Reusable skill / prompt template with placeholder support */
+export interface DatabaseSkill {
+	id: string;
+	name: string;
+	description: string;
+	icon?: string;
+	/** Template content with {{placeholder}} variables */
+	content: string;
+	/** Category for grouping (writing, coding, analysis, reasoning) */
+	category?: string;
+	/** Placeholder definitions for argument autocomplete */
+	placeholders?: SkillPlaceholder[];
+	/** Whether this is a built-in skill (non-deletable) */
+	isBuiltIn?: boolean;
+	createdAt: number;
+	lastUsedAt?: number;
+	usageCount?: number;
+}
+
+export interface SkillPlaceholder {
+	name: string;
+	description: string;
+	defaultValue?: string;
+}
+
+/**
+ * Supported search provider types. Keep this in sync with SEARCH_PROVIDERS
+ * in `$lib/utils/search` - only implemented providers belong here.
+ */
+export type SearchProviderType = 'searxng' | 'ddgs' | 'tavily' | 'brave' | 'serper';
+
+/** Search provider configuration stored in IndexedDB */
+export interface DatabaseSearchProvider {
+	id: string;
+	type: SearchProviderType;
+	name: string;
+	enabled: boolean;
+	apiKey?: string;
+	baseUrl?: string;
+	config?: Record<string, string>;
+	priority: number;
+	createdAt: number;
+}
+
+/** Chat preset - saved combination of settings for one-click apply */
+export interface DatabasePreset {
+	id: string;
+	name: string;
+	systemMessage?: string;
+	/** Sampling config keys (e.g. temperature, top_p) mapped to values */
+	samplingParams?: Partial<Record<string, number | string | boolean>>;
+	mcpOverrides?: McpServerOverride[];
+	/** Whether auto web search is enabled for this preset */
+	webSearchEnabled?: boolean;
+	/** Active web search provider when this preset is applied */
+	webSearchProvider?: string;
+	createdAt: number;
 }
 
 export interface DatabaseMessageExtraAudioFile {

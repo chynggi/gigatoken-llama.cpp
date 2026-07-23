@@ -6,7 +6,8 @@
 		ChatMessageAssistantProcessingInfo,
 		ChatMessageAssistantRawOutput,
 		ChatMessageAssistantStatistics,
-		ChatMessageEditForm
+		ChatMessageEditForm,
+		ModelLogo
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
@@ -14,8 +15,9 @@
 	import { modelLoadProgressText } from '$lib/utils';
 	import { MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	import { hasAgenticContent } from '$lib/utils';
 
@@ -64,7 +66,6 @@
 		textareaElement = $bindable()
 	}: Props = $props();
 
-	// Get edit context
 	const editCtx = getMessageEditContext();
 
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
@@ -74,15 +75,39 @@
 	let isRouter = $derived(isRouterMode());
 
 	let showRawOutput = $state(false);
+	let showModelResponseLogo = $derived(
+		Boolean(currentConfig[SETTINGS_KEYS.SHOW_MODEL_RESPONSE_LOGO] ?? true)
+	);
 
 	let displayedModel = $derived(message.model ?? null);
+	let logoModelHint = $derived(
+		displayedModel ??
+			modelsStore.selectedModelName ??
+			modelsStore.singleModelName ??
+			serverStore.props?.model_path ??
+			null
+	);
+	let logoArchitecture = $derived.by(() => {
+		const fromProps = serverStore.props?.model_architecture;
+		if (fromProps) return fromProps;
+
+		const modelKey = displayedModel ?? modelsStore.selectedModelName;
+		if (!modelKey || !isRouter) return null;
+
+		const entry = modelsStore.routerModels.find(
+			(m) => m.id === modelKey || m.name === modelKey || m.aliases?.includes(modelKey)
+		);
+		const arch = entry?.meta?.architecture;
+		return typeof arch === 'string' && arch.length > 0 ? arch : null;
+	});
+	let logoChatTemplate = $derived(serverStore.props?.chat_template ?? null);
+	let logoModelAlias = $derived(serverStore.props?.model_alias ?? null);
 
 	let isCurrentlyLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
-	// during a router auto-load the message has no model yet, so target the selected one
 	let loadTargetModel = $derived(message.model ?? modelsStore.selectedModelName);
 	let modelLoadProgress = $derived(
 		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
@@ -149,7 +174,10 @@
 
 <div
 	bind:this={assistantEl}
-	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
+	class="chat-message-assistant text-md group w-full leading-7.5 {className} {isLastAssistantMessage &&
+	isChatStreaming()
+		? 'glass-glow-pulse rounded-2xl'
+		: ''}"
 	style:--last-user-message-height={lastUserMessageHeight > 0
 		? `${lastUserMessageHeight}px`
 		: undefined}
@@ -164,16 +192,31 @@
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		{#if showRawOutput}
-			<ChatMessageAssistantRawOutput {message} {toolMessages} />
-		{:else}
-			<ChatMessageAgenticContent
-				{message}
-				{toolMessages}
-				isStreaming={isChatStreaming()}
-				{isLastAssistantMessage}
-			/>
-		{/if}
+		<div class="flex w-full items-start gap-3">
+			{#if showModelResponseLogo}
+				<ModelLogo
+					class="mt-1"
+					model={logoModelHint}
+					architecture={logoArchitecture}
+					chatTemplate={logoChatTemplate}
+					modelAlias={logoModelAlias}
+					size="md"
+				/>
+			{/if}
+
+			<div class="min-w-0 flex-1">
+				{#if showRawOutput}
+					<ChatMessageAssistantRawOutput {message} {toolMessages} />
+				{:else}
+					<ChatMessageAgenticContent
+						{message}
+						{toolMessages}
+						isStreaming={isChatStreaming()}
+						{isLastAssistantMessage}
+					/>
+				{/if}
+			</div>
+		</div>
 	{/if}
 
 	{#if showProcessingInfoBottom}
@@ -239,6 +282,58 @@
 					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
 					var(--assistant-margin-top, 3rem)
 			);
+		}
+	}
+
+	.processing-container {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.5rem;
+	}
+
+	.processing-text {
+		background: linear-gradient(
+			90deg,
+			var(--muted-foreground),
+			var(--foreground),
+			var(--muted-foreground)
+		);
+		background-size: 200% 100%;
+		background-clip: text;
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		animation: shine 1s linear infinite;
+		font-weight: 500;
+		font-size: 0.875rem;
+	}
+
+	@keyframes shine {
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	.raw-output {
+		width: 100%;
+		max-width: 48rem;
+		margin-top: 1.5rem;
+		padding: 1rem 1.25rem;
+		border-radius: 1rem;
+		background: hsl(var(--muted) / 0.3);
+		color: var(--foreground);
+		font-size: 0.875rem;
+		line-height: 1.6;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	@media (min-width: 1536px) {
+		:global(html.wide-chat-mode) .raw-output {
+			max-width: 64rem;
+		}
+		:global(html.full-chat-mode) .raw-output {
+			max-width: 100%;
 		}
 	}
 </style>

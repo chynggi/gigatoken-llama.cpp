@@ -22,10 +22,19 @@ import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
+import { FolderService } from '$lib/services/folder.service';
 import { MigrationService } from '$lib/services/migration.service';
-import { config } from '$lib/stores/settings.svelte';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
+import {
+	collectAllTags,
+	conversationIdsInFolder,
+	nextTagFilter,
+	patchConversationOrgState,
+	tagsAfterAdd,
+	tagsAfterRemove
+} from '$lib/utils/conversation-org';
 import type { McpServerOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import {
@@ -36,7 +45,7 @@ import {
 	MimeTypeApplication,
 	ReasoningEffort
 } from '$lib/enums';
-import {
+import { SETTINGS_KEYS,
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
 	ISO_TIMESTAMP_SLICE_LENGTH,
@@ -80,12 +89,52 @@ class ConversationsStore {
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
 
+	/** Organization — folders for grouping conversations */
+	folders = $state<DatabaseFolder[]>([]);
+
+	/** Currently selected tag filter (empty = no filter) */
+	activeTagFilter = $state<string | null>(null);
+
+	/** Whether to show archived conversations */
+	showArchived = $state(false);
+
+	/** Pending MCP server overrides for new conversations (before first message) */
+	pendingMcpServerOverrides = $state<McpServerOverride[]>([]);
+
+	/** Global (non-conversation-specific) thinking toggle default, derived from reasoning effort */
+	pendingThinkingEnabled = $state(false);
+
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
-	private static loadReasoningEffortDefault(): ReasoningEffort {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
+	/** Last non-off reasoning effort, restored when re-enabling thinking globally */
+	private lastNonOffEffort: ReasoningEffort | null = null;
+
+	private static loadMcpDefaults(): McpServerOverride[] {
+		const raw = config()[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES];
+		if (typeof raw !== 'string' || raw.length === 0) return [];
+		try {
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return [];
+			return parsed.filter(
+				(o: unknown) => typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
+			) as McpServerOverride[];
+		} catch {
+			return [];
+		}
+	}
+
+	private saveMcpDefaults(): void {
+		const plain = this.pendingMcpServerOverrides.map((o) => ({
+			serverId: o.serverId,
+			enabled: o.enabled
+		}));
+		settingsStore.updateConfig(SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES, JSON.stringify(plain));
+	}
+
+	/** Load reasoning effort default from localStorage */
+	private static loadReasoningEffortDefault(): ReasoningEffort | ReasoningEffort.OFF {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.OFF;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
 			return (raw as ReasoningEffort) || ReasoningEffort.DEFAULT;
@@ -127,6 +176,7 @@ class ConversationsStore {
 		try {
 			await MigrationService.runAllMigrations();
 			await this.loadConversations();
+			this.reloadPendingMcpFromSettings();
 			this.isInitialized = true;
 		} catch (error) {
 			console.error('Failed to initialize conversations:', error);
@@ -212,6 +262,16 @@ class ConversationsStore {
 	async loadConversations(): Promise<void> {
 		const conversations = await DatabaseService.getAllConversations();
 		this.conversations = conversations;
+		await this.loadFolders();
+	}
+
+	/** Load folders from the database */
+	async loadFolders(): Promise<void> {
+		try {
+			this.folders = await FolderService.getAll();
+		} catch (error) {
+			console.error('Failed to load folders:', error);
+		}
 	}
 
 	/**
@@ -284,7 +344,16 @@ class ConversationsStore {
 		this.activeConversation = null;
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
+		this.reloadPendingMcpFromSettings();
 		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
+	}
+
+	/**
+	 * Re-read MCP default overrides from settings into pending state.
+	 * Call after external settings writes (e.g. applyPreset) so new chats pick them up.
+	 */
+	reloadPendingMcpFromSettings(): void {
+		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
 	}
 
 	/**
@@ -1090,6 +1159,42 @@ class ConversationsStore {
 		this.downloadConversationFile({ conv: conversation, messages });
 	}
 
+	private async getConversationExportData(
+		convId: string
+	): Promise<{ conv: DatabaseConversation; messages: DatabaseMessage[] } | null> {
+		const conversation =
+			this.activeConversation?.id === convId
+				? this.activeConversation
+				: await DatabaseService.getConversation(convId);
+
+		if (!conversation) return null;
+
+		const messages = await DatabaseService.getConversationMessages(convId);
+		return { conv: conversation, messages };
+	}
+
+	async downloadConversationMarkdown(convId: string): Promise<void> {
+		const data = await this.getConversationExportData(convId);
+		if (!data) return;
+
+		const { exportConversationAsMarkdown } = await import('$lib/utils/export');
+		const markdown = exportConversationAsMarkdown(data.conv, data.messages);
+		const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+		const safeName = data.conv.name.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT);
+		this.triggerDownload(blob, `${safeName || 'conversation'}.md`);
+	}
+
+	async downloadConversationHtml(convId: string): Promise<void> {
+		const data = await this.getConversationExportData(convId);
+		if (!data) return;
+
+		const { exportConversationAsHtml } = await import('$lib/utils/export');
+		const html = exportConversationAsHtml(data.conv, data.messages);
+		const blob = new Blob([html], { type: 'text/html' });
+		const safeName = data.conv.name.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT);
+		this.triggerDownload(blob, `${safeName || 'conversation'}.html`);
+	}
+
 	/**
 	 * Imports conversations from a JSON file
 	 * Opens file picker and processes the selected file
@@ -1131,6 +1236,7 @@ class ConversationsStore {
 					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
 
 					await this.loadConversations();
+			this.reloadPendingMcpFromSettings();
 
 					const importedConversations = (
 						Array.isArray(importedData) ? importedData : [importedData]
@@ -1159,7 +1265,93 @@ class ConversationsStore {
 	): Promise<{ imported: number; skipped: number }> {
 		const result = await DatabaseService.importConversations(data);
 		await this.loadConversations();
+			this.reloadPendingMcpFromSettings();
 		return result;
+	}
+
+	// ------------------------------------------------------------------
+	// Organization (folder / tag / archive) - pure helpers in conversation-org.ts
+	// ------------------------------------------------------------------
+
+	private applyOrgPatch(convId: string, patch: Parameters<typeof patchConversationOrgState>[3]): void {
+		const next = patchConversationOrgState(
+			this.conversations,
+			this.activeConversation,
+			convId,
+			patch
+		);
+		this.conversations = next.conversations;
+		this.activeConversation = next.activeConversation;
+	}
+
+	async createFolder(name: string, color?: string): Promise<DatabaseFolder> {
+		const folder = await FolderService.create(name, color);
+		this.folders = [...this.folders, folder];
+		return folder;
+	}
+
+	async renameFolder(id: string, name: string): Promise<void> {
+		await FolderService.update(id, { name });
+		const idx = this.folders.findIndex((f) => f.id === id);
+		if (idx !== -1) {
+			this.folders[idx] = { ...this.folders[idx], name };
+			this.folders = [...this.folders];
+		}
+	}
+
+	async deleteFolder(id: string): Promise<void> {
+		await FolderService.delete(id);
+		this.folders = this.folders.filter((f) => f.id !== id);
+		for (const convId of conversationIdsInFolder(this.conversations, id)) {
+			this.applyOrgPatch(convId, { folderId: undefined });
+		}
+	}
+
+	async moveConversationToFolder(convId: string, folderId: string | undefined): Promise<void> {
+		if (folderId === undefined) {
+			await DatabaseService.clearConversationFolder(convId);
+		} else {
+			await DatabaseService.updateConversation(convId, { folderId });
+		}
+		this.applyOrgPatch(convId, { folderId });
+	}
+
+	async addTagToConversation(convId: string, tag: string): Promise<void> {
+		const conv = this.conversations.find((c) => c.id === convId);
+		if (!conv) return;
+		const newTags = tagsAfterAdd(conv.tags, tag);
+		if (!newTags) return;
+		await DatabaseService.updateConversation(convId, { tags: newTags });
+		this.applyOrgPatch(convId, { tags: newTags });
+	}
+
+	async removeTagFromConversation(convId: string, tag: string): Promise<void> {
+		const conv = this.conversations.find((c) => c.id === convId);
+		if (!conv) return;
+		const newTags = tagsAfterRemove(conv.tags, tag);
+		await DatabaseService.updateConversation(convId, { tags: newTags });
+		this.applyOrgPatch(convId, { tags: newTags });
+	}
+
+	get allTags(): string[] {
+		return collectAllTags(this.conversations);
+	}
+
+	setTagFilter(tag: string | null): void {
+		this.activeTagFilter = nextTagFilter(this.activeTagFilter, tag);
+	}
+
+	async toggleArchiveConversation(convId: string): Promise<boolean> {
+		const conv = this.conversations.find((c) => c.id === convId);
+		if (!conv) return false;
+		const newState = !conv.archived;
+		await DatabaseService.updateConversation(convId, { archived: newState });
+		this.applyOrgPatch(convId, { archived: newState });
+		return newState;
+	}
+
+	setShowArchived(show: boolean): void {
+		this.showArchived = show;
 	}
 }
 

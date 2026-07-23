@@ -20,3 +20,19 @@ export function generateConversationTitle(content: string, useFirstLine: boolean
 
 	return content.trim();
 }
+
+const REASONING_PREVIEW_MAX = 120;
+
+export function formatReasoningPreview(content: string): { preview: string; overflow: number } {
+	const trimmed = content.trim();
+	if (trimmed.length === 0) return { preview: '', overflow: 0 };
+
+	if (trimmed.length <= REASONING_PREVIEW_MAX) {
+		return { preview: trimmed, overflow: 0 };
+	}
+
+	return {
+		preview: trimmed.slice(0, REASONING_PREVIEW_MAX),
+		overflow: trimmed.length - REASONING_PREVIEW_MAX
+	};
+}

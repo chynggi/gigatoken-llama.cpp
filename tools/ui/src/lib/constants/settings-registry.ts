@@ -10,6 +10,7 @@ import {
 	Sliders,
 	PencilRuler,
 	Database,
+	Package,
 	Monitor as MonitorIcon,
 	Sun,
 	Moon
@@ -24,6 +25,7 @@ import type {
 	SettingsSection
 } from '$lib/types';
 import { CLI_FLAGS, DEFAULT_MCP_CONFIG } from '$lib/constants';
+import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
@@ -36,7 +38,9 @@ export const SETTINGS_SECTION_TITLES = {
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
 	IMPORT_EXPORT: 'Import/Export',
-	DEVELOPER: 'Developer'
+	DEVELOPER: 'Developer',
+	MCP: 'MCP',
+	PACKS: 'Packs'
 } as const;
 
 const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Component }[] = [
@@ -52,6 +56,33 @@ const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component 
 	{ value: ColorMode.SYSTEM, label: 'System', icon: MonitorIcon },
 	{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
 	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+];
+
+const ACCENT_COLOR_OPTIONS: Array<{ value: string; label: string }> = [
+	{ value: 'default', label: 'Default' },
+	{ value: 'blue', label: 'Blue' },
+	{ value: 'green', label: 'Green' },
+	{ value: 'purple', label: 'Purple' },
+	{ value: 'orange', label: 'Orange' },
+	{ value: 'pink', label: 'Pink' },
+	{ value: 'red', label: 'Red' }
+];
+
+const THEME_STYLE_OPTIONS: Array<{ value: string; label: string }> = [
+	{ value: 'default', label: 'Default' },
+	{ value: 'tokyo-night', label: 'Tokyo Night' },
+	{ value: 'nord', label: 'Nord' },
+	{ value: 'dracula', label: 'Dracula' },
+	{ value: 'gruvbox', label: 'Gruvbox' },
+	{ value: 'synthwave', label: 'Synthwave \'84' },
+	{ value: 'soft', label: 'Soft (Gradio)' },
+	{ value: 'monochrome', label: 'Monochrome (Gradio)' }
+];
+
+const CHAT_WIDTH_STYLE_OPTIONS: Array<{ value: string; label: string }> = [
+	{ value: 'normal', label: 'Normal (Centered)' },
+	{ value: 'wide', label: 'Wide' },
+	{ value: 'full', label: 'Full Width (Fluid)' }
 ];
 
 // Shared options for the title-generation radio group. Both paired registry entries
@@ -269,6 +300,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.AUTO_EXPAND_THINKING,
+				label: 'Auto-expand thinking blocks',
+				help: 'Keep reasoning/thinking blocks expanded by default after generation finishes (and while streaming).',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.AUTO_EXPAND_THINKING,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
 				label: 'Always show tool call content',
 				help: 'Automatically expand tool call details while executing and keep them expanded after completion.',
@@ -303,6 +346,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_MODEL_RESPONSE_LOGO,
+				label: 'Show model response logo',
+				help: 'Show a provider/architecture logo next to assistant replies. Family is inferred from the model name/path and the logo is loaded from a public CDN.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			},
 			{
 				key: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
@@ -387,6 +438,41 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.SHOW_BUILD_VERSION,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.WIDE_CHAT_MODE,
+				label: 'Wide chat mode',
+				help: 'Expand the chat message column up to max-w-5xl on large screens (2xl breakpoint). The sidebar continues to resize automatically.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY
+			},
+			{
+				key: SETTINGS_KEYS.ACCENT_COLOR,
+				label: 'Accent color',
+				help: 'Choose a custom accent color used for focus glows, message bubbles, and AI activity highlights.',
+				defaultValue: 'default',
+				type: SettingsFieldType.SELECT,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				options: ACCENT_COLOR_OPTIONS
+			},
+			{
+				key: SETTINGS_KEYS.THEME_STYLE,
+				label: 'Theme style variation',
+				help: 'Choose a specific theme style variation to customize color schemes and syntax highlighting.',
+				defaultValue: 'default',
+				type: SettingsFieldType.SELECT,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				options: THEME_STYLE_OPTIONS
+			},
+			{
+				key: SETTINGS_KEYS.CHAT_WIDTH_STYLE,
+				label: 'Chat layout width',
+				help: 'Choose how wide the chat message list should expand. Full Width fills the entire window space except the sidebar.',
+				defaultValue: 'normal',
+				type: SettingsFieldType.SELECT,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				options: CHAT_WIDTH_STYLE_OPTIONS
 			}
 		]
 	},
@@ -752,6 +838,106 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.CUSTOM_CSS,
 					paramType: SyncableParameterType.STRING
 				}
+			}
+		]
+	},
+	[SETTINGS_SECTION_SLUGS.MCP]: {
+		title: SETTINGS_SECTION_TITLES.MCP,
+		slug: SETTINGS_SECTION_SLUGS.MCP,
+		icon: McpLogo,
+		settings: [
+			{
+				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+				label: 'Request timeout (seconds)',
+				help: 'Default timeout for individual MCP tool calls. Can be overridden per server.',
+				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.MCP,
+				isPositiveInteger: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+					paramType: SyncableParameterType.NUMBER
+				}
+			}
+		]
+	},
+	[SETTINGS_SECTION_SLUGS.PACKS]: {
+		title: SETTINGS_SECTION_TITLES.PACKS,
+		slug: SETTINGS_SECTION_SLUGS.PACKS,
+		icon: Package,
+		settings: [
+			{
+				key: SETTINGS_KEYS.FOLDER_ORGANIZATION_ENABLED,
+				label: 'Folder organization',
+				help: 'Enable conversation folders, tags, and archive. Adds folder management to the sidebar.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.SKILL_SYSTEM_ENABLED,
+				label: 'Skill system',
+				help: 'Enable reusable prompt templates with slash commands (/summarize, /translate, etc.). Manage skills at #/skills.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.WEB_SEARCH_ENABLED,
+				label: 'Web search',
+				help: 'Inject web search results into chat context on send. Configure providers at #/search-providers. When auto-detect is off, every message is searched; when on, only messages ending with ?.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.WEB_SEARCH_AUTO_DETECT,
+				label: 'Auto-detect search queries',
+				help: 'When enabled, only search for messages that end with a question mark. When disabled, search every message while web search is on.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.WEB_SEARCH_RESULTS_COUNT,
+				label: 'Search results count',
+				help: 'Number of search results to inject into chat context (1-10).',
+				defaultValue: 5,
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isPositiveInteger: true,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.WEB_SEARCH_ACTIVE_PROVIDER,
+				label: 'Active search provider',
+				help: 'ID of the default search provider. Leave empty to use the first enabled provider. Manage providers at #/search-providers.',
+				defaultValue: '',
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.PRESETS_ENABLED,
+				label: 'Chat presets',
+				help: 'Enable saved presets (system message + sampling + MCP + web search). Apply from the chat form, command palette, or #/presets.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.COMMAND_PALETTE_ENABLED,
+				label: 'Command palette',
+				help: 'Enable Cmd/Ctrl+K command palette for quick actions: search conversations, run skills, apply presets, and more.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.PACKS,
+				isExperimental: true
 			}
 		]
 	}

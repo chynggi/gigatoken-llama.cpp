@@ -692,3 +692,6 @@ export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerE
  * Renders nothing otherwise. Shown inside ChatScreen only on an active conversation route.
  */
 export { default as ChatScreenStreamResumeStatus } from './ChatScreen/ChatScreenStreamResumeStatus.svelte';
+
+/** Preview panel for web search results displayed above the chat input */
+export { default as SearchResultsPreview } from './SearchResultsPreview.svelte';

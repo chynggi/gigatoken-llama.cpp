@@ -247,7 +247,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	border-radius: 0.75rem;
 	overflow: hidden;
 	border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
-	background: var(--code-background);
+	background: color-mix(in oklch, var(--code-background) 90%, transparent);
+	backdrop-filter: blur(12px) saturate(140%);
+	-webkit-backdrop-filter: blur(12px) saturate(140%);
 	box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
 	min-height: var(--min-message-height);
 	max-height: var(--max-message-height);
@@ -626,7 +628,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	border-radius: 0.75rem;
 	overflow: hidden;
 	border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
-	background: var(--code-background);
+	background: color-mix(in oklch, var(--code-background) 90%, transparent);
+	backdrop-filter: blur(12px) saturate(140%);
+	-webkit-backdrop-filter: blur(12px) saturate(140%);
 	box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
 	position: relative;
 	min-height: var(--min-message-height);

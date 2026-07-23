@@ -60,6 +60,12 @@ export type {
 export type {
 	McpServerOverride,
 	DatabaseConversation,
+	DatabaseFolder,
+	DatabaseSkill,
+	SkillPlaceholder,
+	SearchProviderType,
+	DatabaseSearchProvider,
+	DatabasePreset,
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraVideoFile,
 	DatabaseMessageExtraImageFile,

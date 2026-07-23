@@ -1,3 +1,4 @@
+import { DEFAULT_MCP_CONFIG } from './mcp';
 import type { RecommendedMCPServer } from '$lib/types';
 
 // Suggested MCP servers shown as opt-in cards in the "Add New Server" dialog.
@@ -36,3 +37,9 @@ export const RECOMMENDED_MCP_SERVERS: RecommendedMCPServer[] = [
 		iconUrl: '/recommended-mcp/context7.png'
 	}
 ];
+
+export const RECOMMENDED_MCP_SERVER_IDS = new Set(
+	RECOMMENDED_MCP_SERVERS.map((server) => server.id)
+);
+
+export const RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY = 1000;

@@ -20,6 +20,8 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { searchProvidersStore } from '$lib/stores/search-providers.svelte';
+import { toast } from 'svelte-sonner';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -997,9 +999,25 @@ class ChatStore {
 		}
 		const currentConv = conversationsStore.activeConversation;
 		if (!currentConv) return;
+
+		// Lock the form before web search so concurrent sends cannot interleave
 		this.showErrorDialog(null);
 		this.setChatLoading(currentConv.id, true);
 		this.clearChatStreaming(currentConv.id);
+
+		// Search context is request-only: never persisted as user bubble text
+		let searchContext = '';
+		if (searchProvidersStore.shouldSearch(content)) {
+			try {
+				searchContext = await searchProvidersStore.searchForChatContext(content);
+			} catch (error) {
+				console.warn('Web search failed, sending without results:', error);
+				toast.error('Web search failed', {
+					description: error instanceof Error ? error.message : 'Unknown error'
+				});
+			}
+		}
+
 		try {
 			let parentIdForUserMessage: string | undefined;
 			if (isNewConversation) {
@@ -1016,6 +1034,7 @@ class ChatStore {
 					parentIdForUserMessage = systemMessage.id;
 				} else parentIdForUserMessage = rootId;
 			}
+			// Persist original user text only
 			const userMessage = await this.addMessage(
 				MessageRole.USER,
 				content,
@@ -1030,8 +1049,18 @@ class ChatStore {
 				);
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 			conversationsStore.addMessageToActive(assistantMessage);
+
+			// Inject search into the API path only (clone last user message for the request)
+			let messagesForApi = conversationsStore.activeMessages.slice(0, -1);
+			if (searchContext) {
+				messagesForApi = messagesForApi.map((msg) => {
+					if (msg.id !== userMessage.id) return msg;
+					return { ...msg, content: `${msg.content}${searchContext}` };
+				});
+			}
+
 			await this.streamChatCompletion(
-				conversationsStore.activeMessages.slice(0, -1),
+				messagesForApi,
 				assistantMessage,
 				undefined,
 				undefined,

@@ -51,6 +51,8 @@ struct server_context_meta {
     uint64_t model_n_params;
     uint64_t model_size;
     std::string model_ftype;
+    // GGUF metadata key general.architecture (e.g. "qwen2", "llama", "gemma3")
+    std::string model_architecture;
 };
 
 enum server_state {

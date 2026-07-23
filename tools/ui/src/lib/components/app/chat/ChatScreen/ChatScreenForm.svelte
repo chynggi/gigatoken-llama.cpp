@@ -136,7 +136,7 @@
 
 <div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
 	<ChatForm
-		class="mx-auto max-w-3xl {className}"
+		class="mx-auto chat-width {className}"
 		bind:this={chatFormRef}
 		bind:value={message}
 		bind:uploadedFiles

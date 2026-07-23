@@ -41,6 +41,7 @@
 
 	let expandedStates: Record<number, boolean> = $state({});
 
+	const autoExpandThinking = $derived(config().autoExpandThinking as boolean);
 	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
 	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
 	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
@@ -145,7 +146,11 @@
 		}
 
 		if (section.type === AgenticSectionType.REASONING_PENDING) {
-			return showThoughtInProgress;
+			return showThoughtInProgress || autoExpandThinking;
+		}
+
+		if (section.type === AgenticSectionType.REASONING) {
+			return autoExpandThinking;
 		}
 
 		return false;
@@ -256,6 +261,15 @@
 		flex-direction: column;
 		width: 100%;
 		max-width: 48rem;
+	}
+
+	@media (min-width: 1536px) {
+		:global(html.wide-chat-mode) .agentic-content {
+			max-width: 64rem;
+		}
+		:global(html.full-chat-mode) .agentic-content {
+			max-width: 100%;
+		}
 	}
 
 	.agentic-content > :global(*),

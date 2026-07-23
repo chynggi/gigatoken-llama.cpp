@@ -6,8 +6,11 @@
 		ChatScreenDragOverlay,
 		ChatScreenStreamResumeStatus,
 		ServerLoadingSplash,
-		ChatScreenServerError
+		ChatScreenServerError,
+		SearchResultsPreview
 	} from '$lib/components/app';
+	import { Button } from '$lib/components/ui/button';
+	import { Expand, Maximize2, Minimize2 } from '@lucide/svelte';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -28,8 +31,10 @@
 		activeMessages,
 		activeConversation
 	} from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { searchProvidersStore } from '$lib/stores/search-providers.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { serverLoading, serverError } from '$lib/stores/server.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { onDestroy, onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
@@ -54,6 +59,7 @@
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+	let chatWidthStyle = $derived(String(config()[SETTINGS_KEYS.CHAT_WIDTH_STYLE] ?? 'normal'));
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!isMobile.current) return '1rem';
 		if (device.isStandalone) return '1.5rem';
@@ -192,6 +198,12 @@
 		}
 	});
 
+	// Clear global search preview when switching conversations
+	$effect(() => {
+		void activeConversation()?.id;
+		searchProvidersStore.clearResults();
+	});
+
 	onMount(() => {
 		const pendingDraft = chatStore.consumePendingDraft();
 		if (pendingDraft) {
@@ -286,6 +298,8 @@
 				{/if}
 			</div>
 
+			<SearchResultsPreview />
+
 			<ChatScreenForm
 				class="pointer-events-auto conversation-chat-form"
 				disabled={hasPropsError || isEditing()}
@@ -298,6 +312,31 @@
 				onSystemPromptAdd={handleSystemPromptAdd}
 				bind:uploadedFiles={fileUpload.uploadedFiles}
 			/>
+
+			<div class="pointer-events-auto mt-2 hidden justify-end 2xl:flex">
+				<Button
+					variant="ghost"
+					size="sm"
+					class="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+					onclick={() => {
+						const nextStyle = chatWidthStyle === 'normal' ? 'wide' : chatWidthStyle === 'wide' ? 'full' : 'normal';
+						settingsStore.updateConfig(SETTINGS_KEYS.CHAT_WIDTH_STYLE, nextStyle);
+					}}
+					aria-label={chatWidthStyle === 'normal' ? 'Expand chat to wide' : chatWidthStyle === 'wide' ? 'Expand chat to full' : 'Collapse chat'}
+					title={chatWidthStyle === 'normal' ? 'Expand chat to wide' : chatWidthStyle === 'wide' ? 'Expand chat to full' : 'Collapse chat'}
+				>
+					{#if chatWidthStyle === 'normal'}
+						<Maximize2 class="h-3.5 w-3.5" />
+						Wide chat
+					{:else if chatWidthStyle === 'wide'}
+						<Expand class="h-3.5 w-3.5" />
+						Full chat
+					{:else}
+						<Minimize2 class="h-3.5 w-3.5" />
+						Narrow chat
+					{/if}
+				</Button>
+			</div>
 		</div>
 	</div>
 {/if}

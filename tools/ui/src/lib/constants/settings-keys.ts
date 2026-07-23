@@ -22,6 +22,7 @@ export const SETTINGS_KEYS = {
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
+	AUTO_EXPAND_THINKING: 'autoExpandThinking',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
@@ -33,6 +34,11 @@ export const SETTINGS_KEYS = {
 	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	RENDER_THINKING_AS_MARKDOWN: 'renderThinkingAsMarkdown',
+	SHOW_MODEL_RESPONSE_LOGO: 'showModelResponseLogo',
+	WIDE_CHAT_MODE: 'wideChatMode',
+	ACCENT_COLOR: 'accentColor',
+	THEME_STYLE: 'themeStyle',
+	CHAT_WIDTH_STYLE: 'chatWidthStyle',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',
@@ -57,6 +63,7 @@ export const SETTINGS_KEYS = {
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
 	// MCP
 	MCP_SERVERS: 'mcpServers',
+	MCP_DEFAULT_SERVER_OVERRIDES: 'mcpDefaultServerOverrides',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_TOOL_CALL_CONTENT: 'alwaysShowToolCallContent',
@@ -70,5 +77,14 @@ export const SETTINGS_KEYS = {
 	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	CUSTOM_JSON: 'customJson',
-	CUSTOM_CSS: 'customCss'
+	CUSTOM_CSS: 'customCss',
+	// Packs
+	FOLDER_ORGANIZATION_ENABLED: 'folderOrganizationEnabled',
+	SKILL_SYSTEM_ENABLED: 'skillSystemEnabled',
+	WEB_SEARCH_ENABLED: 'webSearchEnabled',
+	WEB_SEARCH_AUTO_DETECT: 'webSearchAutoDetect',
+	WEB_SEARCH_RESULTS_COUNT: 'webSearchResultsCount',
+	WEB_SEARCH_ACTIVE_PROVIDER: 'webSearchActiveProvider',
+	PRESETS_ENABLED: 'presetsEnabled',
+	COMMAND_PALETTE_ENABLED: 'commandPaletteEnabled'
 } as const;

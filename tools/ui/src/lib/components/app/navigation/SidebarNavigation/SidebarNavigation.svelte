@@ -7,9 +7,11 @@
 		DialogConversationRename,
 		Logo,
 		SidebarNavigationConversationList,
-		SidebarNavigationActions
+		SidebarNavigationActions,
+		SidebarNavigationFolders,
+		SidebarNavigationTags
 	} from '$lib/components/app';
-	import { ROUTES } from '$lib/constants';
+	import { ROUTES, SETTINGS_KEYS } from '$lib/constants';
 	import { fade } from 'svelte/transition';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
@@ -27,6 +29,9 @@
 	import { TooltipSide } from '$lib/enums';
 	import { device } from '$lib/stores/device.svelte';
 	import { circIn } from 'svelte/easing';
+	import { filterConversations } from '$lib/utils/conversation-filters';
+	import { Button } from '$lib/components/ui/button';
+	import { Archive, ArchiveRestore } from '@lucide/svelte';
 
 	interface Props {
 		onSearchClick?: () => void;
@@ -78,19 +83,27 @@
 	let currentChatId = $derived(page.params.id);
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
+	let activeFolderId = $state<string | undefined>(undefined);
+
+	const folderOrgEnabled = $derived(Boolean(config()[SETTINGS_KEYS.FOLDER_ORGANIZATION_ENABLED]));
 
 	let filteredConversations = $derived.by(() => {
-		if (isSearchModeActive) {
-			if (searchQuery.trim().length > 0) {
-				return conversations().filter((conversation: { name: string }) =>
-					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
-				);
-			}
+		const all = conversations();
 
-			return [];
+		if (isSearchModeActive) {
+			if (searchQuery.trim().length === 0) return [];
+			return filterConversations(all, {
+				searchQuery,
+				showArchived: true
+			});
 		}
 
-		return conversations();
+		// Always hide archived unless explicitly shown (even when org pack is off)
+		return filterConversations(all, {
+			folderId: folderOrgEnabled ? activeFolderId : undefined,
+			tag: folderOrgEnabled ? conversationsStore.activeTagFilter : null,
+			showArchived: folderOrgEnabled ? conversationsStore.showArchived : false
+		});
 	});
 
 	let isSelectionMode = $state(false);
@@ -298,7 +311,10 @@
 			'rounded-3xl md:rounded-2xl',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding] duration-200 ease-out',
-			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
+			// Expanded state: width, surface, depth
+			isStripExpanded &&
+				'md:w-72 md:bg-background/75 md:dark:bg-background/55 md:backdrop-blur-xl border-border/40 dark:border-border/20 shadow-lg glass-backdrop',
+			// Collapsed state
 			!isStripExpanded && 'md:w-12',
 			isExpandedMode && 'is-expanded'
 		]}
@@ -376,8 +392,38 @@
 				}}
 			/>
 
-			{#if isExpandedMode || isOnMobile}
-				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+		{#if isExpandedMode || isOnMobile}
+			{#if folderOrgEnabled && !isSearchModeActive}
+				<div class="px-2">
+					<SidebarNavigationFolders
+						{activeFolderId}
+						onFolderSelect={(id) => (activeFolderId = id)}
+					/>
+				</div>
+				<div class="px-2">
+					<SidebarNavigationTags />
+				</div>
+				<div class="px-2">
+					<Button
+						variant="ghost"
+						size="sm"
+						class="w-full justify-start gap-2 px-2 h-7 text-xs {conversationsStore.showArchived
+							? 'bg-accent text-accent-foreground'
+							: ''}"
+						onclick={() =>
+							conversationsStore.setShowArchived(!conversationsStore.showArchived)}
+					>
+						{#if conversationsStore.showArchived}
+							<ArchiveRestore class="h-3.5 w-3.5" />
+							<span>Hide archived</span>
+						{:else}
+							<Archive class="h-3.5 w-3.5" />
+							<span>Show archived</span>
+						{/if}
+					</Button>
+				</div>
+			{/if}
+			<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 					<SidebarNavigationConversationList
 						class="px-2"
 						{filteredConversations}

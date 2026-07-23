@@ -66,8 +66,15 @@
 	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
 	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 	import '$styles/katex-custom.scss';
-	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import githubDarkCss from 'highlight.js/styles/github-dark-dimmed.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import tokyoNightDarkCss from 'highlight.js/styles/tokyo-night-dark.css?inline';
+	import tokyoNightLightCss from 'highlight.js/styles/tokyo-night-light.css?inline';
+	import nordCss from 'highlight.js/styles/nord.css?inline';
+	import draculaCss from 'highlight.js/styles/base16/dracula.css?inline';
+	import gruvboxDarkCss from 'highlight.js/styles/base16/gruvbox-dark-medium.css?inline';
+	import gruvboxLightCss from 'highlight.js/styles/base16/gruvbox-light-medium.css?inline';
+	import grayscaleCss from 'highlight.js/styles/grayscale.css?inline';
 	import { mode } from 'mode-watcher';
 	import {
 		CodeBlockActions,
@@ -211,7 +218,7 @@
 	 * Injects a scoped style element into the document head.
 	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
 	 */
-	function loadHighlightTheme(isDark: boolean) {
+	function loadHighlightTheme(isDark: boolean, themeStyle: string) {
 		if (!browser) return;
 
 		const existingTheme = document.getElementById(themeStyleId);
@@ -219,8 +226,22 @@
 
 		const style = document.createElement('style');
 		style.id = themeStyleId;
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
 
+		let cssContent = isDark ? githubDarkCss : githubLightCss;
+
+		if (themeStyle === 'tokyo-night') {
+			cssContent = isDark ? tokyoNightDarkCss : tokyoNightLightCss;
+		} else if (themeStyle === 'nord') {
+			cssContent = nordCss;
+		} else if (themeStyle === 'dracula' || themeStyle === 'synthwave') {
+			cssContent = draculaCss;
+		} else if (themeStyle === 'gruvbox') {
+			cssContent = isDark ? gruvboxDarkCss : gruvboxLightCss;
+		} else if (themeStyle === 'monochrome') {
+			cssContent = grayscaleCss;
+		}
+
+		style.textContent = cssContent;
 		document.head.appendChild(style);
 	}
 
@@ -782,8 +803,9 @@
 	$effect(() => {
 		const currentMode = mode.current;
 		const isDark = currentMode === ColorMode.DARK;
+		const themeStyle = String(config()[SETTINGS_KEYS.THEME_STYLE] ?? 'default');
 
-		loadHighlightTheme(isDark);
+		loadHighlightTheme(isDark, themeStyle);
 	});
 
 	$effect(() => {

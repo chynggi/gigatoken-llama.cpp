@@ -10,6 +10,10 @@
 		GitBranch,
 		Pin,
 		PinOff,
+		Archive,
+		ArchiveRestore,
+		FolderInput,
+		Tag,
 		ListChecks
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
@@ -19,8 +23,10 @@
 	import { RouterService } from '$lib/services/router.service';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { TruncatedText } from '$lib/components/app';
 	import { onMount } from 'svelte';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		isActive?: boolean;
@@ -77,6 +83,37 @@
 	function handleTogglePin() {
 		conversationsStore.toggleConversationPin(conversation.id);
 	}
+
+	function handleToggleArchive() {
+		conversationsStore.toggleArchiveConversation(conversation.id);
+	}
+
+	function handleAddTag() {
+		const tag = window.prompt('Enter tag name:');
+		if (tag && tag.trim()) {
+			conversationsStore.addTagToConversation(conversation.id, tag.trim());
+		}
+	}
+
+	function handleMoveToFolder(folderId: string | undefined) {
+		conversationsStore.moveConversationToFolder(conversation.id, folderId);
+	}
+
+	function handleRemoveTag(tag: string) {
+		conversationsStore.removeTagFromConversation(conversation.id, tag);
+	}
+
+	async function handleExportMarkdown() {
+		await conversationsStore.downloadConversationMarkdown(conversation.id);
+	}
+
+	async function handleExportHtml() {
+		await conversationsStore.downloadConversationHtml(conversation.id);
+	}
+
+	const folderOrgEnabled = $derived(Boolean(config().folderOrganizationEnabled));
+	const folders = $derived(conversationsStore.folders);
+	const conversationTags = $derived(conversation.tags ?? []);
 
 	function handleEnterSelectionMode(event: Event) {
 		event.stopPropagation();
@@ -154,7 +191,7 @@
 
 <!-- svelte-ignore a11y_mouse_events_have_key_events -->
 <button
-	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
+	class="group flex min-h-11 md:min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background {isActive
 		? 'bg-foreground/5 text-accent-foreground'
 		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
 		? 'is-selection-mode'
@@ -239,8 +276,8 @@
 		<TruncatedText text={conversation.name} class="text-sm font-medium" showTooltip={false} />
 	</div>
 
-	{#if !isSelectionMode && renderActionsDropdown}
-		<div class="actions flex items-center">
+	{#if !isSelectionMode && (renderActionsDropdown || dropdownOpen)}
+		<div transition:fade={{ duration: 150 }} class="actions flex items-center">
 			<DropdownMenuActions
 				triggerIcon={MoreHorizontal}
 				triggerTooltip="More actions"
@@ -254,6 +291,57 @@
 							handleTogglePin();
 						}
 					},
+					...(folderOrgEnabled
+						? [
+								{
+									icon: conversation.archived ? ArchiveRestore : Archive,
+									label: conversation.archived ? 'Unarchive' : 'Archive',
+									onclick: (e: Event) => {
+										e.stopPropagation();
+										handleToggleArchive();
+									}
+								},
+								{
+									icon: Tag,
+									label: 'Add tag',
+									onclick: (e: Event) => {
+										e.stopPropagation();
+										handleAddTag();
+									}
+								},
+								...conversationTags.map((tag: string) => ({
+									icon: Tag,
+									label: `Remove tag: ${tag}`,
+									onclick: (e: Event) => {
+										e.stopPropagation();
+										handleRemoveTag(tag);
+									}
+								})),
+								...folders.map((folder) => ({
+									icon: FolderInput,
+									label:
+										conversation.folderId === folder.id
+											? `Folder: ${folder.name} (current)`
+											: `Move to: ${folder.name}`,
+									onclick: (e: Event) => {
+										e.stopPropagation();
+										handleMoveToFolder(folder.id);
+									}
+								})),
+								...(conversation.folderId
+									? [
+											{
+												icon: FolderInput,
+												label: 'Remove from folder',
+												onclick: (e: Event) => {
+													e.stopPropagation();
+													handleMoveToFolder(undefined);
+												}
+											}
+										]
+									: [])
+							]
+						: []),
 					{
 						icon: Pencil,
 						label: 'Edit',
@@ -262,7 +350,7 @@
 					},
 					{
 						icon: Download,
-						label: 'Export',
+						label: 'Export JSON',
 						onclick: (e: Event) => {
 							e.stopPropagation();
 							conversationsStore.downloadConversation(conversation.id);
@@ -273,6 +361,22 @@
 						icon: ListChecks,
 						label: 'Select',
 						onclick: handleEnterSelectionMode
+					},
+					{
+						icon: Download,
+						label: 'Export Markdown',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							handleExportMarkdown();
+						}
+					},
+					{
+						icon: Download,
+						label: 'Export HTML',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							handleExportHtml();
+						}
 					},
 					{
 						icon: Trash2,
@@ -292,6 +396,7 @@
 	button {
 		:global([data-slot='dropdown-menu-trigger']:not([data-state='open'])) {
 			opacity: 0;
+			transition: opacity 0.15s ease-in-out;
 		}
 
 		&:is(:hover) :global([data-slot='dropdown-menu-trigger']),

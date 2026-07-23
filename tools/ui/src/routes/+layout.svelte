@@ -7,8 +7,10 @@
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 
-	import { SidebarNavigation } from '$lib/components/app';
+	import { SidebarNavigation, CommandPalette } from '$lib/components/app';
+	import { DialogMcpServerRecommendations } from '$lib/components/app/dialogs';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
+	import ThemeEffects from '$lib/components/app/theme/ThemeEffects.svelte';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -25,6 +27,7 @@
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
+	import { useMcpRecommendations } from '$lib/hooks/use-mcp-recommendations.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
@@ -47,6 +50,7 @@
 
 	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
 	const pwa = usePwa();
+	const mcpRecommendations = useMcpRecommendations();
 	const { needRefresh, updateServiceWorker } = pwa;
 
 	function updateFavicon() {
@@ -280,7 +284,16 @@
 
 	<ModeWatcher />
 
+	<ThemeEffects />
+
 	<Toaster richColors />
+
+	<DialogMcpServerRecommendations
+		open={mcpRecommendations.open}
+		onOpenChange={mcpRecommendations.handleOpenChange}
+	/>
+
+	<CommandPalette />
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->

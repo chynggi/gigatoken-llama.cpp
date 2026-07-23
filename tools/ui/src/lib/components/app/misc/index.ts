@@ -59,3 +59,6 @@ export { default as CodeBlockActions } from './CodeBlockActions.svelte';
  * `class` and `style` props and inherits color via `currentColor`.
  */
 export { default as Logo } from './Logo.svelte';
+
+/** Command palette modal (Cmd/Ctrl+K) for quick navigation and actions */
+export { default as CommandPalette } from '../CommandPalette.svelte';

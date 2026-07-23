@@ -181,6 +181,19 @@ class SettingsStore {
 	updateConfig<K extends keyof SettingsConfigType>(key: K, value: SettingsConfigType[K]): void {
 		this.config[key] = value;
 
+		// Sync wideChatMode and chatWidthStyle
+		if (key === SETTINGS_KEYS.WIDE_CHAT_MODE) {
+			const chatWidthStyle = value ? 'wide' : 'normal';
+			if (this.config[SETTINGS_KEYS.CHAT_WIDTH_STYLE] !== chatWidthStyle) {
+				this.config[SETTINGS_KEYS.CHAT_WIDTH_STYLE] = chatWidthStyle;
+			}
+		} else if (key === SETTINGS_KEYS.CHAT_WIDTH_STYLE) {
+			const wideChatMode = value === 'wide' || value === 'full';
+			if (this.config[SETTINGS_KEYS.WIDE_CHAT_MODE] !== wideChatMode) {
+				this.config[SETTINGS_KEYS.WIDE_CHAT_MODE] = wideChatMode;
+			}
+		}
+
 		if (ParameterSyncService.canSyncParameter(key as string)) {
 			const propsDefaults = this.getServerDefaults();
 			const propsDefault = propsDefaults[key as string];
@@ -205,6 +218,13 @@ class SettingsStore {
 	 * @param updates - Object containing the configuration updates
 	 */
 	updateMultipleConfig(updates: Partial<SettingsConfigType>) {
+		// Sync wideChatMode and chatWidthStyle
+		if (updates[SETTINGS_KEYS.WIDE_CHAT_MODE] !== undefined && updates[SETTINGS_KEYS.CHAT_WIDTH_STYLE] === undefined) {
+			updates[SETTINGS_KEYS.CHAT_WIDTH_STYLE] = updates[SETTINGS_KEYS.WIDE_CHAT_MODE] ? 'wide' : 'normal';
+		} else if (updates[SETTINGS_KEYS.CHAT_WIDTH_STYLE] !== undefined && updates[SETTINGS_KEYS.WIDE_CHAT_MODE] === undefined) {
+			updates[SETTINGS_KEYS.WIDE_CHAT_MODE] = updates[SETTINGS_KEYS.CHAT_WIDTH_STYLE] === 'wide' || updates[SETTINGS_KEYS.CHAT_WIDTH_STYLE] === 'full';
+		}
+
 		Object.assign(this.config, updates);
 
 		const propsDefaults = this.getServerDefaults();

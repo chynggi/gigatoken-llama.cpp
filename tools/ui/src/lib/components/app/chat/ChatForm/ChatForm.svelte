@@ -10,6 +10,7 @@
 	} from '$lib/components/app';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
+		COMPOSE_CHAT_INPUT_EVENT,
 		INPUT_CLASSES,
 		SETTING_CONFIG_DEFAULT,
 		INITIAL_FILE_SIZE,
@@ -31,8 +32,11 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
+	import { skillsStore } from '$lib/stores/skills.svelte';
+	import { presetsStore } from '$lib/stores/presets.svelte';
 	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
+	import { toast } from 'svelte-sonner';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -152,6 +156,17 @@
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
+		document.addEventListener(COMPOSE_CHAT_INPUT_EVENT, handleComposeChatInput as EventListener);
+
+		// Do not consume pending here - useDraftMessages afterNavigate/onMount owns handoff
+		// so draft restore cannot wipe skill text. Event handler still fills when already mounted.
+
+		return () => {
+			document.removeEventListener(
+				COMPOSE_CHAT_INPUT_EVENT,
+				handleComposeChatInput as EventListener
+			);
+		};
 	});
 
 	export function focus() {
@@ -197,7 +212,10 @@
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 		const hasServers = mcpStore.hasEnabledServers(perChatOverrides);
 
-		if (value.startsWith(PROMPT_TRIGGER_PREFIX) && hasServers) {
+		// Skills own `/` when enabled; MCP prompt picker stays available via the Add menu
+		const skillsOwnSlash = skillsStore.enabled;
+
+		if (value.startsWith(PROMPT_TRIGGER_PREFIX) && hasServers && !skillsOwnSlash) {
 			isPromptPickerOpen = true;
 			promptSearchQuery = value.slice(1);
 			isInlineResourcePickerOpen = false;
@@ -243,11 +261,50 @@
 			if (sendOnEnter || isModifier) {
 				event.preventDefault();
 
+				// Resolve skill command before sending
+				if (resolveAndApplySkill()) return;
+
 				if (!canSubmit || disabled || hasLoadingAttachments) return;
 
 				onSubmit?.();
 			}
 		}
+	}
+
+	/**
+	 * @returns true when the key/submit handler should stop (skill handled or blocked).
+	 */
+	function resolveAndApplySkill(): boolean {
+		if (!skillsStore.enabled) return false;
+		if (!value.startsWith('/')) return false;
+
+		const resolved = skillsStore.resolveSkillCommand(value);
+		if (!resolved) return false;
+
+		if (resolved.status === 'incomplete') {
+			toast.error(`Skill /${resolved.skill.name} needs: ${resolved.missing.join(', ')}`);
+			return true;
+		}
+
+		// Expand and send in one step when args are complete
+		value = resolved.expanded;
+		onValueChange?.(resolved.expanded);
+		if (!disabled && !hasLoadingAttachments && resolved.expanded.trim().length > 0) {
+			onSubmit?.();
+		}
+		return true;
+	}
+
+	function handleComposeChatInput(event: Event) {
+		const customEvent = event as CustomEvent<{ text?: string }>;
+		const text = customEvent.detail?.text;
+		if (typeof text !== 'string') return;
+		// Fill the visible form; leave pending/new-chat draft intact for navigation restore
+		value = text;
+		onValueChange?.(text);
+		setTimeout(() => {
+			textareaRef?.focus();
+		}, 50);
 	}
 
 	function handlePaste(event: ClipboardEvent) {
@@ -473,6 +530,9 @@
 	onsubmit={(event) => {
 		event.preventDefault();
 
+		// Resolve skill command before sending (same path as Enter key)
+		if (resolveAndApplySkill()) return;
+
 		if (!canSubmit || disabled || hasLoadingAttachments) return;
 
 		onSubmit?.();
@@ -494,7 +554,7 @@
 	/>
 
 	<div
-		class="{INPUT_CLASSES} overflow-hidden rounded-4xl md:rounded-3xl backdrop-blur-md {disabled
+		class="{INPUT_CLASSES} overflow-hidden rounded-4xl md:rounded-3xl {disabled
 			? 'cursor-not-allowed opacity-60'
 			: ''}"
 		data-slot="input-area"
@@ -510,9 +570,30 @@
 		/>
 
 		<div
-			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
+			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all duration-200 focus-within:shadow-md md:py-3!"
 			onpaste={handlePaste}
 		>
+			{#if presetsStore.enabled && presetsStore.presets.length > 0}
+				<div class="px-5 pb-1">
+					<select
+						class="h-7 max-w-full rounded-md border bg-background px-2 text-xs text-muted-foreground outline-none focus:border-ring"
+						value=""
+						disabled={disabled}
+						onchange={(e) => {
+							const id = (e.currentTarget as HTMLSelectElement).value;
+							if (!id) return;
+							presetsStore.applyPreset(id);
+							(e.currentTarget as HTMLSelectElement).value = '';
+						}}
+					>
+						<option value="" disabled selected>Apply preset...</option>
+						{#each presetsStore.presets as preset (preset.id)}
+							<option value={preset.id}>{preset.name}</option>
+						{/each}
+					</select>
+				</div>
+			{/if}
+
 			<ChatFormTextarea
 				class="px-5 py-1.5 md:pt-0"
 				bind:this={textareaRef}

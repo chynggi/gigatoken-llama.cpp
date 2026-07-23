@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
+import { IDXDB_TABLES, IDXDB_STORE_SCHEMAS, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
@@ -8,15 +8,26 @@ import type { ExportedConversation } from '$lib/types/database';
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
 	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
+	[IDXDB_TABLES.folders]!: EntityTable<DatabaseFolder, string>;
+	[IDXDB_TABLES.skills]!: EntityTable<DatabaseSkill, string>;
+	[IDXDB_TABLES.presets]!: EntityTable<DatabasePreset, string>;
+	[IDXDB_TABLES.searchProviders]!: EntityTable<DatabaseSearchProvider, string>;
 
 	constructor() {
 		super(STORAGE_APP_NAME);
 
-		this.version(1).stores(IDXDB_STORES);
+		// v1: conversations + messages only (historical). v2: packs tables.
+		this.version(1).stores({
+			[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
+			[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages
+		});
+
+		this.version(2).stores(IDXDB_STORES);
 	}
 }
 
-const db = new LlamaUiDatabase();
+/** Shared Dexie instance for conversation/message and pack entity services. */
+export const db = new LlamaUiDatabase();
 
 export class DatabaseService {
 	/**
@@ -455,6 +466,14 @@ export class DatabaseService {
 		await db[IDXDB_TABLES.conversations].update(id, {
 			...updates,
 			lastModified: Date.now()
+		});
+	}
+
+	/** Clear folder membership. Dexie ignores undefined in update(), so use modify. */
+	static async clearConversationFolder(id: string): Promise<void> {
+		await db[IDXDB_TABLES.conversations].where('id').equals(id).modify((c) => {
+			delete c.folderId;
+			c.lastModified = Date.now();
 		});
 	}
 

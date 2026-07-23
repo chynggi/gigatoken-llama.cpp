@@ -51,6 +51,66 @@ export { modelLoadFraction, modelLoadProgressText } from './progress';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
+export { filterConversations, type ConversationFilterOptions } from './conversation-filters';
+export {
+	patchConversationOrgState,
+	collectAllTags,
+	nextTagFilter,
+	conversationIdsInFolder,
+	tagsAfterAdd,
+	tagsAfterRemove,
+	type ConversationOrgPatch
+} from './conversation-org';
+
+// Export formats
+export { exportConversationAsMarkdown, exportConversationAsHtml } from './export';
+
+// Web search
+export {
+	SEARCH_PROVIDERS,
+	getSearchProvider,
+	formatSearchResultsForContext,
+	type SearchProviderConfig,
+	type SearchProvider
+} from './search';
+export {
+	mapDuckDuckGoInstantAnswer,
+	buildDuckDuckGoInstantAnswerUrl,
+	type DuckDuckGoInstantAnswer
+} from './ddgs';
+
+// Skill engine
+export {
+	parseSkillCommand,
+	applySkillTemplate,
+	missingPlaceholders,
+	rankSkills,
+	type ParsedSkillCommand
+} from './skill-engine';
+
+// Command palette builders
+export {
+	buildCommandPaletteItems,
+	filterCommandPaletteItems,
+	groupCommandPaletteItems,
+	type CommandPaletteItemDesc,
+	type CommandPaletteSources
+} from './command-palette-commands';
+
+// Preset apply
+export {
+	buildPresetConfigUpdates,
+	parseMcpOverridesJson,
+	collectSamplingParamsFromForm,
+	PRESET_SAMPLING_KEYS
+} from './preset-apply';
+
+// Compose draft (command palette -> chat form)
+export {
+	setPendingComposeText,
+	consumePendingComposeText,
+	peekPendingComposeText
+} from './compose-draft';
 
 // Clipboard utilities
 export {
@@ -63,7 +123,7 @@ export {
 
 // File preview utilities
 export { getFileTypeLabel } from './file-preview';
-export { getPreviewText, generateConversationTitle } from './text';
+export { getPreviewText, generateConversationTitle, formatReasoningPreview } from './text';
 
 // File type utilities
 export {
@@ -99,6 +159,15 @@ export {
 
 // Model name utilities
 export { normalizeModelName, isValidModelName } from './model-names';
+
+// Model family / architecture logos
+export {
+	parseModelFamily,
+	familyFromGgufArchitecture,
+	getModelLogoUrl,
+	type ResolvedModelFamily,
+	type ParseModelFamilyHints
+} from './model-family';
 
 // Portal utilities
 export { portalToBody } from './portal-to-body';

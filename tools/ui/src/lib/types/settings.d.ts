@@ -26,7 +26,7 @@ export interface SettingsEntry {
 	defaultValue: SettingsConfigValue;
 	type: SettingsFieldType;
 	section?: string;
-	options?: Array<{ value: string; label: string; icon: Component }>;
+	options?: Array<{ value: string; label: string; icon?: Component }>;
 	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;

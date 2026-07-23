@@ -2,9 +2,18 @@
 	import { browser } from '$app/environment';
 	import { mode } from 'mode-watcher';
 
-	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import githubDarkCss from 'highlight.js/styles/github-dark-dimmed.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import tokyoNightDarkCss from 'highlight.js/styles/tokyo-night-dark.css?inline';
+	import tokyoNightLightCss from 'highlight.js/styles/tokyo-night-light.css?inline';
+	import nordCss from 'highlight.js/styles/nord.css?inline';
+	import draculaCss from 'highlight.js/styles/base16/dracula.css?inline';
+	import gruvboxDarkCss from 'highlight.js/styles/base16/gruvbox-dark-medium.css?inline';
+	import gruvboxLightCss from 'highlight.js/styles/base16/gruvbox-light-medium.css?inline';
+	import grayscaleCss from 'highlight.js/styles/grayscale.css?inline';
 	import { ColorMode } from '$lib/enums';
+	import { config } from '$lib/stores/settings.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
 	import { highlightCode } from '$lib/utils';
 
@@ -36,7 +45,7 @@
 	const SCROLL_BOTTOM_THRESHOLD_PX = SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX;
 	let pendingFrame: number | null = null;
 
-	function loadHighlightTheme(isDark: boolean) {
+	function loadHighlightTheme(isDark: boolean, themeStyle: string) {
 		if (!browser) return;
 
 		const existingThemes = document.querySelectorAll('style[data-highlight-theme-preview]');
@@ -44,8 +53,22 @@
 
 		const style = document.createElement('style');
 		style.setAttribute('data-highlight-theme-preview', 'true');
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
+		
+		let cssContent = isDark ? githubDarkCss : githubLightCss;
 
+		if (themeStyle === 'tokyo-night') {
+			cssContent = isDark ? tokyoNightDarkCss : tokyoNightLightCss;
+		} else if (themeStyle === 'nord') {
+			cssContent = nordCss;
+		} else if (themeStyle === 'dracula' || themeStyle === 'synthwave') {
+			cssContent = draculaCss;
+		} else if (themeStyle === 'gruvbox') {
+			cssContent = isDark ? gruvboxDarkCss : gruvboxLightCss;
+		} else if (themeStyle === 'monochrome') {
+			cssContent = grayscaleCss;
+		}
+
+		style.textContent = cssContent;
 		document.head.appendChild(style);
 	}
 
@@ -82,8 +105,9 @@
 	$effect(() => {
 		const currentMode = mode.current;
 		const isDark = currentMode === ColorMode.DARK;
+		const themeStyle = String(config()[SETTINGS_KEYS.THEME_STYLE] ?? 'default');
 
-		loadHighlightTheme(isDark);
+		loadHighlightTheme(isDark, themeStyle);
 	});
 
 	// Pin to bottom at the start of each streaming episode.

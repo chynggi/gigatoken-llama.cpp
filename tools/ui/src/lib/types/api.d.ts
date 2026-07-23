@@ -89,17 +89,37 @@ export interface ApiModelDataEntry {
 	/** Creation timestamp */
 	created: number;
 	/** Whether model files are in HuggingFace cache */
-	in_cache: boolean;
+	in_cache?: boolean;
 	/** Path to model manifest file */
-	path: string;
+	path?: string;
 	/** Current status of the model */
 	status: ApiModelStatus;
 	/** Alternative names that resolve to this model */
 	aliases?: string[];
 	/** Informational tags for this model */
 	tags?: string[];
-	/** Legacy meta field (may be present in older responses) */
-	meta?: Record<string, unknown> | null;
+	/** Multimodal architecture summary from router (modalities, not GGUF arch name) */
+	architecture?: {
+		input_modalities?: string[];
+		output_modalities?: string[];
+	};
+	/**
+	 * Loaded-model metadata merged from child process `get_model_info()`.
+	 * Includes GGUF `architecture` when the model is running.
+	 */
+	meta?: {
+		vocab_type?: number;
+		n_vocab?: number;
+		n_ctx?: number;
+		n_ctx_train?: number;
+		n_embd?: number;
+		n_params?: number;
+		size?: number;
+		ftype?: string;
+		/** GGUF general.architecture */
+		architecture?: string;
+		[key: string]: unknown;
+	} | null;
 }
 
 /**
@@ -238,6 +258,15 @@ export interface ApiLlamaCppServerProps {
 	};
 	total_slots: number;
 	model_path: string;
+	/** Optional alias from server (`--alias`) when present */
+	model_alias?: string;
+	/** Quantization / ftype label when present */
+	model_ftype?: string;
+	/**
+	 * GGUF metadata `general.architecture` (e.g. "qwen2", "llama", "gemma3").
+	 * Preferred signal for model-family logos.
+	 */
+	model_architecture?: string;
 	role: ServerRole;
 	modalities: {
 		vision: boolean;

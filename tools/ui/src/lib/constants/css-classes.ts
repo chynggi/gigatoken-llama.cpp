@@ -2,17 +2,20 @@ export const BOX_BORDER =
 	'border border-border/30 focus-within:border-border  dark:border-border/20 dark:focus-within:border-border';
 
 export const INPUT_CLASSES = `
-    bg-muted/60 dark:bg-muted/75
+    bg-background/75 dark:bg-background/60
     ${BOX_BORDER}
     shadow-sm
     outline-none
     text-foreground
+    glass-backdrop
+    transition-shadow duration-200
+    glass-focus-ring
 `;
 
 export const PANEL_CLASSES = `
-    bg-background
+    bg-background/85 dark:bg-background/70
     border border-border/30 dark:border-border/20
-    shadow-sm backdrop-blur-lg!
+    shadow-sm backdrop-blur-xl!
     rounded-t-lg!
 `;
 

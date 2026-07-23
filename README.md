@@ -1,5 +1,15 @@
 # llama.cpp
 
+## GigaToken Integration
+
+This fork integrates [GigaToken](https://github.com/marcelroed/gigatoken), a SIMD-accelerated BPE tokenizer achieving ~1000x faster throughput than HuggingFace tokenizers. GigaToken replaces the default tokenization pipeline with a Rust-based implementation that reads data directly and maximizes parallelism, enabling tokenization at GB/s speeds on modern CPUs.
+
+Key features:
+- Drop-in replacement compatible with existing HuggingFace tokenizer workflows
+- SIMD-optimized pretokenization (AVX512/AVX2/NEON)
+- Concurrent cache hierarchies for long-tailed pretoken distributions
+- Support for all commonly used BPE tokenizers (GPT-2, Llama 3, Qwen, DeepSeek, etc.)
+
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -602,3 +612,14 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 - [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
 - [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
 - [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+
+## Citation
+
+```bibtex
+@software{roed2026gigatoken,
+  author = {Marcel R{\o}d},
+  title = {{G}igatoken: SIMD and Cache Hierarchies for 1000x Faster Byte-Pair Encoding Tokenization on Modern CPUs},
+  url = {https://github.com/marcelroed/gigatoken},
+  year = {2026},
+}
+```

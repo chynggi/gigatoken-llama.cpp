@@ -1,15 +1,25 @@
-if (NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "LLAMA_GIGATOKEN currently supports Windows x64 only")
+set(GIGATOKEN_SUPPORTED FALSE)
+if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(GIGATOKEN_SUPPORTED TRUE)
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+    set(GIGATOKEN_SUPPORTED TRUE)
+endif()
+if (NOT GIGATOKEN_SUPPORTED)
+    message(FATAL_ERROR "LLAMA_GIGATOKEN currently supports Windows x64 and Linux x86_64 only")
 endif()
 
 set(GIGATOKEN_COMMIT "542367a3efed134883fb4f1140b49c04e6fad3a3")
 set(GIGATOKEN_TOOLCHAIN "nightly-2026-07-22")
-set(GIGATOKEN_PATCH_SHA256 "1c24eea17db2a1bee26649360d3cece78dc0ff46c7eba58252f871a4ab89d207")
+set(GIGATOKEN_PATCH_SHA256 "e36f9fd2a40d896bb1aa1cd6e6b90a6132fd7ac4cb50861aae9eb3e26358021f")
 set(GIGATOKEN_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/gigatoken")
 set(GIGATOKEN_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/patches/gigatoken-llama-cpp.patch")
 set(GIGATOKEN_BUILD_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/gigatoken-src")
 set(GIGATOKEN_CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/gigatoken-target")
-set(GIGATOKEN_STATIC_LIBRARY "${GIGATOKEN_CARGO_TARGET_DIR}/release/gigatoken_rs.lib")
+if (WIN32)
+    set(GIGATOKEN_STATIC_LIBRARY "${GIGATOKEN_CARGO_TARGET_DIR}/release/gigatoken_rs.lib")
+else()
+    set(GIGATOKEN_STATIC_LIBRARY "${GIGATOKEN_CARGO_TARGET_DIR}/release/libgigatoken_rs.a")
+endif()
 set(GIGATOKEN_BUILD_STATE_FILE "${GIGATOKEN_BUILD_SOURCE_DIR}/.llama-gigatoken-state")
 
 if (NOT EXISTS "${GIGATOKEN_SOURCE_DIR}/Cargo.toml")
@@ -126,15 +136,21 @@ add_library(gigatoken::llama ALIAS gigatoken_llama)
 add_dependencies(gigatoken_llama gigatoken_llama_build)
 target_include_directories(gigatoken_llama INTERFACE "${GIGATOKEN_BUILD_SOURCE_DIR}/include")
 target_link_libraries(gigatoken_llama INTERFACE
-    "${GIGATOKEN_STATIC_LIBRARY}"
-    bcrypt
-    advapi32
-    legacy_stdio_definitions
-    kernel32
-    ntdll
-    userenv
-    ws2_32
-    dbghelp
-    msvcrt)
+    "${GIGATOKEN_STATIC_LIBRARY}")
+if (WIN32)
+    target_link_libraries(gigatoken_llama INTERFACE
+        bcrypt
+        advapi32
+        legacy_stdio_definitions
+        kernel32
+        ntdll
+        userenv
+        ws2_32
+        dbghelp
+        msvcrt)
+else()
+    find_package(Threads REQUIRED)
+    target_link_libraries(gigatoken_llama INTERFACE Threads::Threads)
+endif()
 
 message(STATUS "GigaToken backend: ${GIGATOKEN_COMMIT}, ${GIGATOKEN_RUSTC_VERSION}")

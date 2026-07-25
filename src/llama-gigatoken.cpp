@@ -134,6 +134,7 @@ std::unique_ptr<llama_gigatoken> llama_gigatoken::create(const llama_vocab & voc
     const auto type     = vocab.get_type();
     const auto pre_type = vocab.get_pre_type();
     if (!llama_gigatoken_supports(type, pre_type)) {
+        LLAMA_LOG_INFO("%s: GigaToken not used: unsupported vocab type %d, pre type %d\n", __func__, type, pre_type);
         return nullptr;
     }
     if (vocab.n_tokens() > static_cast<uint32_t>(std::numeric_limits<llama_token>::max())) {
@@ -198,7 +199,13 @@ std::unique_ptr<llama_gigatoken> llama_gigatoken::create(const llama_vocab & voc
     }
     gt_llama_error_free(&error);
 
-    LLAMA_LOG_INFO("%s: GigaToken tokenizer enabled\n", __func__);
+    LLAMA_LOG_INFO("%s: GigaToken tokenizer enabled: type = %s, pre = %d, n_tokens = %u, n_merges = %zu, backend = %s\n",
+            __func__,
+            type == LLAMA_VOCAB_TYPE_SPM ? "SPM" : "BPE",
+            pre_type,
+            vocab.n_tokens(),
+            merges.size(),
+            spm_bpe ? "spm" : "bpe");
     return std::unique_ptr<llama_gigatoken>(new llama_gigatoken(handle, vocab.n_tokens()));
 }
 
@@ -217,6 +224,8 @@ void llama_gigatoken::tokenize(const std::string & text, std::vector<llama_token
         GGML_ABORT("GigaToken tokenizer failed at runtime");
     }
     gt_llama_error_free(&error);
+
+    LLAMA_LOG_INFO("%s: GigaToken encode: %zu bytes -> %zu tokens\n", __func__, text.size(), buffer.len);
 
     output.reserve(output.size() + buffer.len);
     for (size_t i = 0; i < buffer.len; ++i) {

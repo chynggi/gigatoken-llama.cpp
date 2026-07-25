@@ -186,6 +186,9 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content forceMount>
+		<!-- Collapsible.Content renders its children unconditionally and only sets
+		     `hidden`, so a closed block would keep re-rendering its whole body on
+		     every streamed token. Gate on `open` so collapsed content costs nothing. -->
 		{#if open}
 			<div
 				bind:this={contentContainer}

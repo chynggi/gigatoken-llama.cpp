@@ -26,6 +26,7 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
+	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -637,6 +638,8 @@
 			/>
 		</div>
 	</div>
+
+	<ContextGaugePopup />
 </form>
 
 <DialogMcpResourcesBrowser

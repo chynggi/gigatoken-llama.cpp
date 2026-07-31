@@ -14,6 +14,7 @@ export * from './storage';
 export * from './attachment-menu';
 export * from './auto-scroll';
 export * from './context-gauge-popup';
+export * from './conversation-import';
 export * from './binary-detection';
 export * from './built-in-tools';
 export * from './cache';

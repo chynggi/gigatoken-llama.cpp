@@ -34,6 +34,7 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
+#include <io.h>
 #else
 #include <unistd.h>
 #endif

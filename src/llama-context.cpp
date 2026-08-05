@@ -467,6 +467,44 @@ llama_context::llama_context(
         }
     }
 
+    if (hparams.n_expert > 0 && !cparams.warmup &&
+        (params.expert_heat_log_period != 0 || params.expert_hot_s != 0)) {
+        expert_heatmap = std::make_unique<llama_expert_heatmap>(
+            hparams.n_layer(), hparams.n_expert,
+            params.expert_heat_decay,
+            params.expert_heat_log_period,
+            params.expert_hot_s);
+    }
+
+    if (hparams.n_expert > 0 && !cparams.warmup && params.expert_hot_s != 0) {
+        // re-sync cadence ties to the heatmap log period when set, else 100 tokens
+        const int sync_period = params.expert_heat_log_period > 0 ? params.expert_heat_log_period : 100;
+        expert_hotstore = std::make_unique<llama_expert_hotstore>(
+            &model, hparams.n_layer(), hparams.n_expert,
+            params.expert_hot_s, sync_period,
+            params.expert_hyst, params.expert_dwell);
+        // the GPU hot store is only supported on CUDA. On CPU it buys nothing
+        // and on Vulkan it corrupts output (see manuallog section 12).
+        // LLAMA_EXPERT_HOT_FORCE=1 overrides the guard (testing/emergency only).
+        const bool force = getenv("LLAMA_EXPERT_HOT_FORCE") != nullptr;
+        for (auto & backend : backends) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                continue;
+            }
+            const char * name = ggml_backend_dev_name(dev);
+            const bool is_cuda = name != nullptr && strncmp(name, "CUDA", 4) == 0;
+            if (!force && !is_cuda) {
+                LLAMA_LOG_WARN("%s: expert hot store skipped: backend %s is not CUDA (only CUDA is supported)\n",
+                    __func__, name ? name : "?");
+                break;
+            }
+            expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
+            break;
+        }
+        expert_hotstore->log();
+    }
+
     // Initialize the full vocabulary token ids for backend samplers.
     {
         const int n_vocab = model.vocab.n_tokens();
@@ -1387,6 +1425,21 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
         return nullptr;
+    }
+
+    if (expert_heatmap) {
+        synchronize();
+        expert_heatmap->update_from_graph(res->moe_sel_experts);
+    }
+    if (expert_heatmap && expert_hotstore) {
+        if (!expert_hotstore->is_filled) {
+            expert_hotstore->copy_top_s(*expert_heatmap);
+        } else {
+            expert_hotstore->maybe_resync(*expert_heatmap, ubatch.n_tokens > 1);
+            if (getenv("LLAMA_EXPERT_HITRATE")) {
+                expert_hotstore->log_hit_rate(res->moe_sel_experts);
+            }
+        }
     }
 
     ret = GGML_STATUS_SUCCESS;
@@ -3526,6 +3579,11 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.expert_heat_decay           =*/ 0.999f,
+        /*.expert_heat_log_period      =*/ 0,
+        /*.expert_hot_s                =*/ 0,
+        /*.expert_hyst                 =*/ 1.3f,
+        /*.expert_dwell                =*/ 0,
         /*.ctx_other                   =*/ nullptr,
     };
 

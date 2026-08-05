@@ -693,7 +693,8 @@ export class DatabaseService {
 								serverId: o.serverId,
 								enabled: o.enabled
 							}))
-						: undefined
+						: undefined,
+					cwd: sourceConv.cwd
 				};
 
 				await db[IDXDB_TABLES.conversations].add(newConv);

@@ -22,7 +22,41 @@
 #include <stdarg.h>
 
 #if defined(_WIN32)
+
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+    #define NOMINMAX
+#endif
 #include <windows.h>
+
+#if defined(_MSC_VER) && !defined(__clang__)
+typedef volatile LONG atomic_int;
+typedef atomic_int atomic_bool;
+typedef atomic_int atomic_flag;
+
+typedef enum {
+    memory_order_relaxed,
+    memory_order_consume,
+    memory_order_acquire,
+    memory_order_release,
+    memory_order_acq_rel,
+    memory_order_seq_cst
+} memory_order;
+
+static LONG atomic_fetch_add(atomic_int * ptr, LONG inc) {
+    return InterlockedExchangeAdd(ptr, inc);
+}
+static LONG atomic_fetch_add_explicit(atomic_int * ptr, LONG inc, memory_order mo) {
+    // TODO: add support for explicit memory order
+    return InterlockedExchangeAdd(ptr, inc);
+}
+static void atomic_thread_fence(memory_order mo) {
+    MemoryBarrier();
+}
+#else // clang
+#include <stdatomic.h>
+#endif
+
 #else
 #include <stdatomic.h>
 #endif

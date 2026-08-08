@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1
+
+# ------------------------------------------------------------
+# Stage 1: Build gigatoken-llama.cpp for RTX 5090 / Blackwell
+# ------------------------------------------------------------
+FROM nvidia/cuda:12.9.1-devel-ubuntu24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    ca-certificates \
+    curl \
+    libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js for the WebUI (tools/ui) npm build. Vite 7 needs Node >=20.19,
+# newer than the Node 18 that Ubuntu 24.04's apt repo ships.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+COPY . .
+
+# The devel image only ships the CUDA driver stub (no real libcuda.so.1,
+# that comes from the host driver at container runtime). ggml-cuda links
+# against it fine, but ninja then fails linking the CLI tools/server with
+# "undefined reference to cuMemCreate/cuGetErrorString/..." because ld
+# can't locate libcuda.so.1 to verify those symbols transitively.
+# Give the stub the SONAME ld looks for and put it on the link-time search
+# path so every target resolves it, not just ggml-cuda itself.
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+
+RUN cmake -S . -B build \
+    -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_CUDA=ON \
+    -DGGML_CUDA_FA=ON \
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=120 \
+    -DLLAMA_BUILD_TESTS=OFF \
+    -DLLAMA_BUILD_EXAMPLES=OFF \
+    -DLLAMA_BUILD_UI=ON \
+    -DLLAMA_USE_PREBUILT_UI=OFF \
+    && cmake --build build -j 6
+
+# ------------------------------------------------------------
+# Stage 1.5: CUDA runtime libraries
+# Provides libcuda.so.1 and CUDA runtime for linking
+# ------------------------------------------------------------
+FROM nvidia/cuda:12.9.1-runtime-ubuntu24.04 AS runtime-libs
+
+# No additional setup needed; this stage just exports the runtime libs
+
+# ------------------------------------------------------------
+# Stage 2: Final runtime image
+# Combine Vast.ai runtime with compiled binaries + CUDA libs
+# ------------------------------------------------------------
+FROM vastai/llama-cpp:b10182-cuda-12.9 AS runtime
+
+USER root
+
+# Copy CUDA runtime libraries from official CUDA runtime image
+# to ensure libcuda.so.1 and friends are available
+COPY --from=runtime-libs /usr/local/cuda/lib64/ /usr/local/cuda/lib64/
+
+# Replace Vast's llama.cpp distribution with the fork build.
+#
+# Keep the same directory because Vast already exports:
+#   LLAMA_CPP_DIR=/opt/llama.cpp/cuda-12.8
+#   PATH=/opt/llama.cpp/cuda-12.8:$PATH
+#
+COPY --from=builder /src/build/bin/ /opt/llama.cpp/cuda-12.8/
+
+# Useful metadata so it is obvious this is not stock Vast llama.cpp.
+ENV LLAMA_CPP_RELEASE=gigatoken
+ENV LLAMA_CPP_DIR=/opt/llama.cpp/cuda-12.8
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+# Do NOT override ENTRYPOINT.
+# Inherited:
+# ENTRYPOINT ["/opt/instance-tools/bin/entrypoint.sh"]

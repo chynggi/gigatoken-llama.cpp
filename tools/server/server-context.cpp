@@ -19,7 +19,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdio>
 #include <cinttypes>
 #include <exception>
 #include <memory>
@@ -34,9 +33,6 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
-#include <io.h>
-#else
-#include <unistd.h>
 #endif
 
 using json = nlohmann::ordered_json;
@@ -306,7 +302,6 @@ struct server_slot {
     json json_schema;
 
     common_sampler_ptr smpl;
-    bool backend_sampling = false;
 
     llama_token sampled; // in speculative mode, this is the last accepted token
 
@@ -368,7 +363,6 @@ struct server_slot {
         task.reset();
 
         llama_set_sampler(ctx_tgt, id, nullptr);
-        backend_sampling = false;
 
         // clear alora start
         alora_invocation_start = -1;
@@ -850,6 +844,11 @@ struct server_metrics {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
+    uint64_t n_draft_tokens_total      = 0;
+    uint64_t n_draft_accepted_total    = 0;
+    uint64_t n_draft_verif_steps_total = 0;
+    std::vector<uint64_t> n_accepted_per_pos_total;
+
     void init() {
         t_start = ggml_time_us();
     }
@@ -868,6 +867,17 @@ struct server_metrics {
         n_tokens_predicted         += slot.n_decoded;
         t_tokens_generation        += slot.t_token_generation;
         t_tokens_generation_total  += slot.t_token_generation;
+
+        n_draft_tokens_total      += slot.n_draft_total;
+        n_draft_accepted_total    += slot.n_draft_accepted;
+        n_draft_verif_steps_total += slot.n_draft_verif_steps;
+
+        if (n_accepted_per_pos_total.size() < slot.n_accepted_per_pos.size()) {
+            n_accepted_per_pos_total.resize(slot.n_accepted_per_pos.size(), 0);
+        }
+        for (size_t i = 0; i < slot.n_accepted_per_pos.size(); i++) {
+            n_accepted_per_pos_total[i] += slot.n_accepted_per_pos[i];
+        }
     }
 
     void on_decoded(const std::vector<server_slot> & slots) {
@@ -1017,15 +1027,6 @@ private:
         int64_t t_last_load_progress_ms = 0;
         load_progress_data(server_context_impl * ctx, const std::string & stage) : ctx(ctx), stage(stage) {}
     };
-
-    // true when stderr is a terminal, so we can render an in-place progress bar
-    static bool stdout_is_tty() {
-#if defined(_WIN32)
-        return _isatty(_fileno(stderr));
-#else
-        return isatty(fileno(stderr));
-#endif
-    }
     static bool load_progress_callback(float progress, void * user_data) {
         auto * d = static_cast<load_progress_data *>(user_data);
         GGML_ASSERT(d);
@@ -1041,43 +1042,12 @@ private:
             }
             t_last = t_now;
         }
-        // emit a structured loading state for the web UI / router
         if (d->ctx->callback_state) {
             d->ctx->callback_state(SERVER_STATE_LOADING, {
                 {"stages", d->stages},
                 {"current", d->stage},
                 {"value", progress},
             });
-        }
-        // when attached to a terminal, also render an in-place tqdm-style bar
-        if (stdout_is_tty()) {
-            constexpr int bar_width = 30;
-            int pos = (int) (bar_width * progress);
-            if (pos > bar_width) {
-                pos = bar_width;
-            }
-            std::string bar;
-            bar.reserve(bar_width + 24);
-            bar += '\r';
-            bar += '[';
-            for (int i = 0; i < bar_width; i++) {
-                if (i < pos) {
-                    bar += '=';
-                } else if (i == pos) {
-                    bar += '>';
-                } else {
-                    bar += ' ';
-                }
-            }
-            bar += ']';
-            char pct[32];
-            snprintf(pct, sizeof(pct), " %s %3u%%", d->stage.c_str(), (unsigned) (100 * progress));
-            bar += pct;
-            fputs(bar.c_str(), stderr);
-            if (progress >= 1.0f) {
-                fputc('\n', stderr);
-            }
-            fflush(stderr);
         }
         return true;
     }
@@ -1094,7 +1064,7 @@ private:
         params_base = params;
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
-        params_base.n_sampling_outputs_per_seq_max = output_limits.per_seq;
+        params_base.n_outputs_max_per_seq = output_limits.per_seq;
 
         const bool has_mmproj = !params.mmproj.path.empty();
         const bool has_draft = params.speculative.has_dft();
@@ -1870,10 +1840,9 @@ private:
 
             // TODO: tmp until backend sampling is fully implemented
             if (use_backend_sampling) {
-                slot.backend_sampling = llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
+                llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
             } else {
                 llama_set_sampler(ctx_tgt, slot.id, nullptr);
-                slot.backend_sampling = false;
             }
 
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
@@ -2594,6 +2563,11 @@ private:
 
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
+
+                    res->n_draft_tokens_total      = metrics.n_draft_tokens_total;
+                    res->n_draft_accepted_total    = metrics.n_draft_accepted_total;
+                    res->n_draft_verif_steps_total = metrics.n_draft_verif_steps_total;
+                    res->n_accepted_per_pos_total  = metrics.n_accepted_per_pos_total;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -3937,12 +3911,7 @@ private:
                         slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1);
 
                         slot.prompt.tokens.keep_first(ckpt.n_tokens);
-                        if (slot.backend_sampling) {
-                            slot.backend_sampling = llama_set_sampler(
-                                slot.ctx_tgt, slot.id, common_sampler_get(smpl_save.get()));
-                        }
-
-                        slot.smpl = std::move(smpl_save);
+                        common_sampler_copy(smpl_save.get(), slot.smpl.get());
 
                         return;
                     }
@@ -4061,12 +4030,6 @@ server_context_meta server_context::get_meta() const {
 
     const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
 
-    // GGUF general.architecture (e.g. "qwen2", "llama", "gemma3")
-    char arch_buf[128] = {0};
-    if (llama_model_meta_val_str(impl->model_tgt, "general.architecture", arch_buf, sizeof(arch_buf)) < 0) {
-        arch_buf[0] = '\0';
-    }
-
     return server_context_meta {
         /* build_info             */ std::string(llama_build_info()),
         /* model_name             */ impl->model_name,
@@ -4102,7 +4065,6 @@ server_context_meta server_context::get_meta() const {
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
         /* model_ftype            */ ftype_name,
-        /* model_architecture     */ std::string(arch_buf),
     };
 }
 
@@ -4495,6 +4457,18 @@ void server_routes::init_routes() {
                     {"name",  "n_tokens_max"},
                     {"help",  "Largest observed n_tokens."},
                     {"value",  res_task->n_tokens_max}
+            }, {
+                    {"name",  "spec_decode_num_draft_tokens_total"},
+                    {"help",  "Total draft tokens generated"},
+                    {"value",  res_task->n_draft_tokens_total}
+            }, {
+                    {"name",  "spec_decode_num_accepted_tokens_total"},
+                    {"help",  "Total draft tokens accepted by the target model"},
+                    {"value",  res_task->n_draft_accepted_total}
+            }, {
+                    {"name",  "spec_decode_num_drafts_total"},
+                    {"help",  "Total speculative decoding verification steps"},
+                    {"value",  res_task->n_draft_verif_steps_total}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
@@ -4533,6 +4507,17 @@ void server_routes::init_routes() {
                 prometheus << "# HELP llamacpp:" << name << " " << help  << "\n"
                             << "# TYPE llamacpp:" << name << " " << type  << "\n"
                             << "llamacpp:"        << name << " " << value << "\n";
+            }
+        }
+
+        // labeled counter: one time series per draft position
+        if (!res_task->n_accepted_per_pos_total.empty()) {
+            prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
+                          " Accepted tokens per draft position\n"
+                       << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos_total counter\n";
+            for (size_t i = 0; i < res_task->n_accepted_per_pos_total.size(); i++) {
+                prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\""
+                           << i << "\"} " << res_task->n_accepted_per_pos_total[i] << "\n";
             }
         }
 
@@ -4643,7 +4628,6 @@ void server_routes::init_routes() {
             { "model_alias",                 meta->model_name },
             { "model_ftype",                 meta->model_ftype },
             { "model_path",                  meta->model_path },
-            { "model_architecture",          meta->model_architecture },
             { "modalities",                  json {
                 {"vision", meta->has_inp_image},
                 {"video",  meta->has_inp_video},
@@ -4952,12 +4936,10 @@ void server_routes::init_routes() {
                     {"details", {
                         {"parent_model", ""},
                         {"format", "gguf"},
-                        {"family", meta->model_architecture},
-                        {"families", meta->model_architecture.empty()
-                            ? json::array({""})
-                            : json::array({meta->model_architecture})},
+                        {"family", ""},
+                        {"families", {""}},
                         {"parameter_size", ""},
-                        {"quantization_level", meta->model_ftype}
+                        {"quantization_level", ""}
                     }}
                 }
             }},
@@ -5186,16 +5168,14 @@ json server_routes::get_model_info() const {
         {"created",  std::time(0)},
         {"owned_by", "llamacpp"},
         {"meta",     {
-            {"vocab_type",   meta->model_vocab_type},
-            {"n_vocab",      meta->model_vocab_n_tokens},
-            {"n_ctx",        meta->slot_n_ctx},
-            {"n_ctx_train",  meta->model_n_ctx_train},
-            {"n_embd",       meta->model_n_embd_inp},
-            {"n_params",     meta->model_n_params},
-            {"size",         meta->model_size},
-            {"ftype",        meta->model_ftype},
-            // GGUF general.architecture
-            {"architecture", meta->model_architecture},
+            {"vocab_type",  meta->model_vocab_type},
+            {"n_vocab",     meta->model_vocab_n_tokens},
+            {"n_ctx",       meta->slot_n_ctx},
+            {"n_ctx_train", meta->model_n_ctx_train},
+            {"n_embd",      meta->model_n_embd_inp},
+            {"n_params",    meta->model_n_params},
+            {"size",        meta->model_size},
+            {"ftype",       meta->model_ftype},
         }},
     };
 }

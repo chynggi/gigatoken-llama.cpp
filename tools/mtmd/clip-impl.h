@@ -455,6 +455,7 @@ enum projector_type {
     PROJECTOR_TYPE_MIMO_AUDIO,
     PROJECTOR_TYPE_QWEN3TTS_SPKENC,
     PROJECTOR_TYPE_QWEN3TTS_GEN,
+    PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -514,6 +515,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_PARAKEET,          "parakeet"},
     { PROJECTOR_TYPE_QWEN3TTS_SPKENC,   "qwen3tts_spkenc"},
     { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
+    { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -671,6 +673,9 @@ struct clip_image_f32 {
         return buf.empty();
     }
 
+    void serialize(struct mtmd_serialization & ser) const;
+    void deserialize(struct mtmd_serialization & ser);
+
   private:
     std::vector<float> buf;
     int nx_ = 0;
@@ -752,6 +757,9 @@ struct clip_image_f32_batch {
         }
         return new_batch;
     }
+
+    void serialize(struct mtmd_serialization & ser) const;
+    void deserialize(struct mtmd_serialization & ser);
 };
 
 //

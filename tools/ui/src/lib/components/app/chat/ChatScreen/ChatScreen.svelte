@@ -12,6 +12,7 @@
 		ServerLoadingSplash
 	} from '$lib/components/app';
 	import { LANDING_SETTLE_MAX_MS, LANDING_STABLE_FRAMES, ROUTES } from '$lib/constants';
+	import SearchResultsPreview from '$lib/fork/search/SearchResultsPreview.svelte';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -348,6 +349,8 @@
 					/>
 				{/if}
 			</div>
+
+			<SearchResultsPreview />
 
 			<ChatScreenForm
 				class="pointer-events-auto conversation-chat-form"

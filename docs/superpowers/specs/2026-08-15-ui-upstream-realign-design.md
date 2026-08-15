@@ -313,3 +313,70 @@ upstream 테스트의 타임아웃 취약성이다.
 
 **게이트 정책**: `tests/unit/mcp-*.test.ts`의 타임아웃 실패는 환경 요인으로 분류해 신규 실패
 판정에서 제외한다. 단정 실패(`AssertionError`)로 바뀌면 그때는 실제 회귀로 취급한다.
+
+**추가 게이트 규칙 (Phase 4에서 발견)**: `test:unit`과 `test:client`를 한 명령에 이어서
+실행하면 `agentic-stream.perf.svelte.test.ts`가 부하로 타임아웃한다. 게이트는 기준선과 같은
+조건, 즉 각각 단독으로 실행한다.
+
+## 11. Phase 2~8 결과 (2026-08-15)
+
+### 최종 완료 판정
+
+| # | 기준 | 결과 |
+|---|---|---|
+| 1 | upstream 원본 수정 10파일 이하 | **6파일** — 충족 |
+| 2 | 기준선 대비 신규 실패 0건 | check 0에러, client 116 통과, unit은 알려진 flake 1건 — 충족 |
+| 3 | 폐기 대상 참조 0건 | 10개 항목 전부 0건 — 충족 |
+| 4 | 유지 기능 5묶음 존재 | 11개 진입점 확인 — 충족 |
+
+시작 시점의 485개 파일 수정이 6개 파일로 줄었다. fork 코드는 `$lib/fork/` 아래 29개 파일에 모여 있다.
+
+### upstream 원본 수정 6파일
+
+| 파일 | 델타 | 성격 | 5줄 기준 |
+|---|---|---|---|
+| `lib/components/app/chat/ChatScreen/ChatScreen.svelte` | +3 | SearchResultsPreview 마운트 | 충족 |
+| `app.css` | +4 | 폰트 `@import`, `fork.css` `@import` | 충족 |
+| `lib/services/database.service.ts` | +5 | `version(2)`, `forkDb` export | 충족 |
+| `routes/+layout.svelte` | +6 | CommandPalette·ThemeEffects 마운트 | 초과 |
+| `lib/constants/settings-registry.constants.ts` | +6/-3 | import + spread 2곳 (실질 3줄) | 초과 |
+| `lib/components/app/navigation/SidebarNavigation/SidebarNavigationConversationItem.svelte` | +19 | 내보내기 메뉴 항목 2개 | 초과 |
+
+**5줄 기준에 대한 정정**: 이 숫자는 설계 단계에서 근거 없이 잡은 값이었다. 실제로는
+`+layout.svelte`와 `settings-registry`는 import·spread·마운트라 사실상 훅이고,
+`SidebarNavigationConversationItem`의 +19는 메뉴 항목이 객체 리터럴이라 압축이 불가능한
+구조적 한계다. 셋 다 순수 추가이며 upstream 라인을 지우지 않는다. 파일 수 기준이 실질적인
+지표이고, 줄 수 기준은 참고값으로 낮춰 읽는 것이 맞다.
+
+**upstream 의미를 건드린 유일한 지점**: `settings-registry.constants.ts`의
+`SETTINGS_REGISTRY`가 `} as const;`에서 `};`로 바뀌었다. non-const `Record`를 spread하면
+`as const`와 충돌해 불가피했다. 타입 검사 0에러로 리터럴 타입 의존이 없음을 확인했다.
+
+### 설계에서 벗어난 결정
+
+| Phase | 설계 | 실제 | 이유 |
+|---|---|---|---|
+| 1 | `sharp` 직접 의존성과 `--legacy-peer-deps` 재적용 | 재적용 0건, 되돌림 | upstream도 `overrides`로 전이 해결하며 `npm ci` 통과. `lodash-es`는 미사용 죽은 의존성. `scripts/` 델타는 eslint 자동 정렬 churn |
+| 2 | 훅 2곳 (`database.service.ts`, `database.constants.ts`) | 1곳 | `FORK_STORES`를 fork 쪽에 두면 상수 파일을 건드릴 이유가 없다 |
+| 3 | `search.ts`는 Phase 4 | Phase 3으로 이동 | search-providers 스토어가 의존. 검색 엔진은 Packs의 토대 |
+| 3 | 설정은 전부 Phase 7 | 키는 Phase 3, 레지스트리만 Phase 7 | 스토어들이 fork 설정 키를 먼저 필요로 함 |
+| 3 | 이동만 | 프리셋 MCP 처리 재작성 | upstream이 `mcp-default-overrides-merge-v1` 마이그레이션으로 `mcpServers[i].enabled`를 단일 진실원으로 삼았다. 결과적으로 conversations 스토어 델타가 0이 됨 |
+| 5 | 내보내기/가져오기 재작성 + 스냅샷 비교 | Markdown/HTML만, 명세 테스트 | 포맷터는 이미 순수 함수였고 JSON 경로는 upstream이 이미 보유. 그대로 옮기는데 자기 출력과 비교하는 것은 순환 논증 |
+| 6 | `app.css` 완전 격리 불가 | 격리 성공 (524줄 분리, 2줄만 잔류) | "삭제"로 보인 2줄이 실제로는 수정이라 캐스케이드 재선언으로 대체 가능 |
+| 6 | `compose-draft` 훅 유지 | draft 슬롯 방식으로 축소 | `COMPOSE_CHAT_INPUT_EVENT`는 리스너 없는 죽은 경로였고, upstream `afterNavigate`가 이미 복원한다. `use-draft-messages.svelte.ts` 36줄 수정을 회피 |
+
+### 폐기한 기능
+
+Folders/Tags, MCP 추천 다이얼로그, `use-throttle`. 관련 참조는 0건이며 Dexie `folders`
+테이블은 선언만 남아 데이터가 보존된다.
+
+### 남은 위험
+
+**`app.css`/`fork.css`는 게이트가 검증하지 못한다.** `check`도 vitest도 CSS 캐스케이드를
+보지 않는다. 테마 7종, 글래스 효과, 채팅 폭 3모드, accent 7색은 육안 확인이 필요하다.
+
+**컴포넌트 테스트가 없는 6개** — `CommandPalette`, `ThemeEffects`, `ModelLogo`,
+`SearchResultsPreview`, 라우트 3개 — 는 타입 검사만이 방어선이다.
+
+**빌드는 수행하지 않았다.** 사용자 지시로 C++ 검증 빌드를 금지했고, `npm run build`도
+돌리지 않았다. `svelte-check`는 통과하지만 프로덕션 번들이 만들어지는지는 미확인이다.

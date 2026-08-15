@@ -1,32 +1,24 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import {
-		Trash2,
-		Pencil,
-		MoreHorizontal,
 		Download,
-		Loader2,
-		Square,
 		GitBranch,
+		ListChecks,
+		Loader2,
+		MoreHorizontal,
+		Pencil,
 		Pin,
 		PinOff,
-		Archive,
-		ArchiveRestore,
-		FolderInput,
-		Tag,
-		ListChecks
+		Square,
+		Trash2
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
-	import { RouterService } from '$lib/services/router.service';
-	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
 	import { TruncatedText } from '$lib/components/app';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { FORK_TREE_DEPTH_PADDING, ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
+	import { chatStore, conversationsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
-	import { fade } from 'svelte/transition';
 
 	interface Props {
 		isActive?: boolean;
@@ -46,24 +38,24 @@
 
 	let {
 		conversation,
+		depth = 0,
+		isActive = false,
+		isSelected = false,
+		isSelectionMode = false,
 		onDelete,
 		onEdit,
-		onSelect,
-		onStop,
-		onToggleSelect,
 		onEnterSelectionMode,
-		onSelectionClick,
 		onRowMouseDown,
-		isActive = false,
-		isSelectionMode = false,
-		isSelected = false,
-		depth = 0
+		onSelect,
+		onSelectionClick,
+		onStop,
+		onToggleSelect
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	let isLoading = $derived(getAllLoadingChats().includes(conversation.id));
+	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
@@ -83,37 +75,6 @@
 	function handleTogglePin() {
 		conversationsStore.toggleConversationPin(conversation.id);
 	}
-
-	function handleToggleArchive() {
-		conversationsStore.toggleArchiveConversation(conversation.id);
-	}
-
-	function handleAddTag() {
-		const tag = window.prompt('Enter tag name:');
-		if (tag && tag.trim()) {
-			conversationsStore.addTagToConversation(conversation.id, tag.trim());
-		}
-	}
-
-	function handleMoveToFolder(folderId: string | undefined) {
-		conversationsStore.moveConversationToFolder(conversation.id, folderId);
-	}
-
-	function handleRemoveTag(tag: string) {
-		conversationsStore.removeTagFromConversation(conversation.id, tag);
-	}
-
-	async function handleExportMarkdown() {
-		await conversationsStore.downloadConversationMarkdown(conversation.id);
-	}
-
-	async function handleExportHtml() {
-		await conversationsStore.downloadConversationHtml(conversation.id);
-	}
-
-	const folderOrgEnabled = $derived(Boolean(config().folderOrganizationEnabled));
-	const folders = $derived(conversationsStore.folders);
-	const conversationTags = $derived(conversation.tags ?? []);
 
 	function handleEnterSelectionMode(event: Event) {
 		event.stopPropagation();
@@ -136,6 +97,7 @@
 
 	function handleMouseOver() {
 		if (isSelectionMode) return;
+
 		renderActionsDropdown = true;
 	}
 
@@ -149,6 +111,7 @@
 
 	function handleCheckboxClick(event: MouseEvent) {
 		event.stopPropagation();
+
 		if (isSelectionMode) {
 			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
 		} else {
@@ -162,8 +125,10 @@
 
 	function handleCheckboxKeydown(event: KeyboardEvent) {
 		if (event.key !== ' ' && event.key !== 'Enter') return;
+
 		event.stopPropagation();
 		event.preventDefault();
+
 		if (isSelectionMode) {
 			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
 		} else {
@@ -189,14 +154,13 @@
 	});
 </script>
 
-<!-- svelte-ignore a11y_mouse_events_have_key_events -->
 <button
-	class="group flex min-h-11 md:min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background {isActive
+	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
 		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
 		? 'is-selection-mode'
 		: ''} px-2"
-	data-conversation-row={conversation.id}
+	{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
 	onclick={(e) => handleSelect(e)}
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
@@ -276,8 +240,8 @@
 		<TruncatedText text={conversation.name} class="text-sm font-medium" showTooltip={false} />
 	</div>
 
-	{#if !isSelectionMode && (renderActionsDropdown || dropdownOpen)}
-		<div transition:fade={{ duration: 150 }} class="actions flex items-center">
+	{#if !isSelectionMode && renderActionsDropdown}
+		<div class="actions flex items-center">
 			<DropdownMenuActions
 				triggerIcon={MoreHorizontal}
 				triggerTooltip="More actions"
@@ -291,57 +255,6 @@
 							handleTogglePin();
 						}
 					},
-					...(folderOrgEnabled
-						? [
-								{
-									icon: conversation.archived ? ArchiveRestore : Archive,
-									label: conversation.archived ? 'Unarchive' : 'Archive',
-									onclick: (e: Event) => {
-										e.stopPropagation();
-										handleToggleArchive();
-									}
-								},
-								{
-									icon: Tag,
-									label: 'Add tag',
-									onclick: (e: Event) => {
-										e.stopPropagation();
-										handleAddTag();
-									}
-								},
-								...conversationTags.map((tag: string) => ({
-									icon: Tag,
-									label: `Remove tag: ${tag}`,
-									onclick: (e: Event) => {
-										e.stopPropagation();
-										handleRemoveTag(tag);
-									}
-								})),
-								...folders.map((folder) => ({
-									icon: FolderInput,
-									label:
-										conversation.folderId === folder.id
-											? `Folder: ${folder.name} (current)`
-											: `Move to: ${folder.name}`,
-									onclick: (e: Event) => {
-										e.stopPropagation();
-										handleMoveToFolder(folder.id);
-									}
-								})),
-								...(conversation.folderId
-									? [
-											{
-												icon: FolderInput,
-												label: 'Remove from folder',
-												onclick: (e: Event) => {
-													e.stopPropagation();
-													handleMoveToFolder(undefined);
-												}
-											}
-										]
-									: [])
-							]
-						: []),
 					{
 						icon: Pencil,
 						label: 'Edit',
@@ -350,7 +263,7 @@
 					},
 					{
 						icon: Download,
-						label: 'Export JSON',
+						label: 'Export',
 						onclick: (e: Event) => {
 							e.stopPropagation();
 							conversationsStore.downloadConversation(conversation.id);
@@ -363,28 +276,12 @@
 						onclick: handleEnterSelectionMode
 					},
 					{
-						icon: Download,
-						label: 'Export Markdown',
-						onclick: (e: Event) => {
-							e.stopPropagation();
-							handleExportMarkdown();
-						}
-					},
-					{
-						icon: Download,
-						label: 'Export HTML',
-						onclick: (e: Event) => {
-							e.stopPropagation();
-							handleExportHtml();
-						}
-					},
-					{
 						icon: Trash2,
 						label: 'Delete',
 						onclick: handleDelete,
-						variant: 'destructive',
+						separator: true,
 						shortcut: ['shift', 'cmd', 'd'],
-						separator: true
+						variant: 'destructive'
 					}
 				]}
 			/>
@@ -396,7 +293,6 @@
 	button {
 		:global([data-slot='dropdown-menu-trigger']:not([data-state='open'])) {
 			opacity: 0;
-			transition: opacity 0.15s ease-in-out;
 		}
 
 		&:is(:hover) :global([data-slot='dropdown-menu-trigger']),

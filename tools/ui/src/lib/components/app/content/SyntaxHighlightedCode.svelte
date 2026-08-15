@@ -1,21 +1,11 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { mode } from 'mode-watcher';
-
-	import githubDarkCss from 'highlight.js/styles/github-dark-dimmed.css?inline';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import tokyoNightDarkCss from 'highlight.js/styles/tokyo-night-dark.css?inline';
-	import tokyoNightLightCss from 'highlight.js/styles/tokyo-night-light.css?inline';
-	import nordCss from 'highlight.js/styles/nord.css?inline';
-	import draculaCss from 'highlight.js/styles/base16/dracula.css?inline';
-	import gruvboxDarkCss from 'highlight.js/styles/base16/gruvbox-dark-medium.css?inline';
-	import gruvboxLightCss from 'highlight.js/styles/base16/gruvbox-light-medium.css?inline';
-	import grayscaleCss from 'highlight.js/styles/grayscale.css?inline';
-	import { ColorMode } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX, UI_DATA_ATTRS } from '$lib/constants';
+	import { BooleanString, ColorMode } from '$lib/enums';
 	import { highlightCode } from '$lib/utils';
+	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import { mode } from 'mode-watcher';
 
 	interface Props {
 		code: string;
@@ -29,9 +19,9 @@
 	}
 
 	let {
+		class: className = '',
 		code,
 		language = 'text',
-		class: className = '',
 		maxHeight = '60vh',
 		maxWidth = '',
 		streaming = false
@@ -45,35 +35,26 @@
 	const SCROLL_BOTTOM_THRESHOLD_PX = SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX;
 	let pendingFrame: number | null = null;
 
-	function loadHighlightTheme(isDark: boolean, themeStyle: string) {
+	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
 
-		const existingThemes = document.querySelectorAll('style[data-highlight-theme-preview]');
+		const existingThemes = document.querySelectorAll(
+			`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`
+		);
+
 		existingThemes.forEach((style) => style.remove());
 
 		const style = document.createElement('style');
-		style.setAttribute('data-highlight-theme-preview', 'true');
-		
-		let cssContent = isDark ? githubDarkCss : githubLightCss;
 
-		if (themeStyle === 'tokyo-night') {
-			cssContent = isDark ? tokyoNightDarkCss : tokyoNightLightCss;
-		} else if (themeStyle === 'nord') {
-			cssContent = nordCss;
-		} else if (themeStyle === 'dracula' || themeStyle === 'synthwave') {
-			cssContent = draculaCss;
-		} else if (themeStyle === 'gruvbox') {
-			cssContent = isDark ? gruvboxDarkCss : gruvboxLightCss;
-		} else if (themeStyle === 'monochrome') {
-			cssContent = grayscaleCss;
-		}
+		style.setAttribute(UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW, BooleanString.TRUE);
+		style.textContent = isDark ? githubDarkCss : githubLightCss;
 
-		style.textContent = cssContent;
 		document.head.appendChild(style);
 	}
 
 	function isAtBottom(): boolean {
 		if (!scrollEl) return false;
+
 		return (
 			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
 			SCROLL_BOTTOM_THRESHOLD_PX
@@ -82,8 +63,10 @@
 
 	function scrollToBottomOnFrame() {
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
+
 			// User may scroll between scheduling and paint.
 			if (scrollEl && !userScrolledUp) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
@@ -93,21 +76,23 @@
 
 	function handleScrollEvent() {
 		if (!scrollEl) return;
+
 		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+
 		if (isScrollingUp && !isAtBottom()) {
 			userScrolledUp = true;
 		} else if (isAtBottom()) {
 			userScrolledUp = false;
 		}
+
 		lastScrollTop = scrollEl.scrollTop;
 	}
 
 	$effect(() => {
 		const currentMode = mode.current;
 		const isDark = currentMode === ColorMode.DARK;
-		const themeStyle = String(config()[SETTINGS_KEYS.THEME_STYLE] ?? 'default');
 
-		loadHighlightTheme(isDark, themeStyle);
+		loadHighlightTheme(isDark);
 	});
 
 	// Pin to bottom at the start of each streaming episode.
@@ -120,7 +105,9 @@
 
 	$effect(() => {
 		void code;
+
 		if (!streaming || userScrolledUp) return;
+
 		scrollToBottomOnFrame();
 	});
 
@@ -129,10 +116,11 @@
 		if (!streaming || !scrollEl) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();

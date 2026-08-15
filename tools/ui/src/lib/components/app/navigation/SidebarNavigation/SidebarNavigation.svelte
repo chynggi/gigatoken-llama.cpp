@@ -1,37 +1,24 @@
 <script lang="ts">
+	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		DialogConversationRename,
 		Logo,
-		SidebarNavigationConversationList,
 		SidebarNavigationActions,
-		SidebarNavigationFolders,
-		SidebarNavigationTags
+		SidebarNavigationConversationList
 	} from '$lib/components/app';
-	import { ROUTES, SETTINGS_KEYS } from '$lib/constants';
-	import { fade } from 'svelte/transition';
-	import { SvelteSet } from 'svelte/reactivity';
-	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
-
-	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import {
-		buildConversationTree,
-		conversationsStore,
-		conversations
-	} from '$lib/stores/conversations.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { RouterService } from '$lib/services/router.service';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { ROUTES } from '$lib/constants';
 	import { TooltipSide } from '$lib/enums';
-	import { device } from '$lib/stores/device.svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
+	import { RouterService } from '$lib/services/router.service';
+	import { chatStore, conversationsStore, device, isMobile, settingsStore } from '$lib/stores';
+	import { buildConversationTree } from '$lib/utils';
 	import { circIn } from 'svelte/easing';
-	import { filterConversations } from '$lib/utils/conversation-filters';
-	import { Button } from '$lib/components/ui/button';
-	import { Archive, ArchiveRestore } from '@lucide/svelte';
+	import { SvelteSet } from 'svelte/reactivity';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		onSearchClick?: () => void;
@@ -50,7 +37,7 @@
 
 	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
 	const isOnMobile = $derived(isMobile.current);
-	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
+	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {
@@ -60,6 +47,7 @@
 
 	function toggleExpandedMode() {
 		isExpandedMode = !isExpandedMode;
+
 		if (!isExpandedMode) {
 			hoveredTooltip = null;
 		}
@@ -69,7 +57,9 @@
 		if (!isExpandedMode) {
 			isSearchModeActive = false;
 			searchQuery = '';
+
 			if (isSelectionMode) exitSelectionMode();
+
 			cancelMobileCollapse();
 		}
 	});
@@ -83,27 +73,19 @@
 	let currentChatId = $derived(page.params.id);
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
-	let activeFolderId = $state<string | undefined>(undefined);
-
-	const folderOrgEnabled = $derived(Boolean(config()[SETTINGS_KEYS.FOLDER_ORGANIZATION_ENABLED]));
 
 	let filteredConversations = $derived.by(() => {
-		const all = conversations();
-
 		if (isSearchModeActive) {
-			if (searchQuery.trim().length === 0) return [];
-			return filterConversations(all, {
-				searchQuery,
-				showArchived: true
-			});
+			if (searchQuery.trim().length > 0) {
+				return conversationsStore.conversations.filter((conversation: { name: string }) =>
+					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
+				);
+			}
+
+			return [];
 		}
 
-		// Always hide archived unless explicitly shown (even when org pack is off)
-		return filterConversations(all, {
-			folderId: folderOrgEnabled ? activeFolderId : undefined,
-			tag: folderOrgEnabled ? conversationsStore.activeTagFilter : null,
-			showArchived: folderOrgEnabled ? conversationsStore.showArchived : false
-		});
+		return conversationsStore.conversations;
 	});
 
 	let isSelectionMode = $state(false);
@@ -120,43 +102,58 @@
 
 	const allSelectedArePinned = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
-		const convs = conversations();
+
+		const convs = conversationsStore.conversations;
+
 		for (const id of selectedIds) {
 			const c = convs.find((conv) => conv.id === id);
+
 			if (c && !c.pinned) return false;
 		}
+
 		return true;
 	});
 
 	const pinStateIsMixed = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
-		const convs = conversations();
+
+		const convs = conversationsStore.conversations;
+
 		let anyPinned = false;
 		let anyUnpinned = false;
+
 		for (const id of selectedIds) {
 			const c = convs.find((conv) => conv.id === id);
+
 			if (!c) continue;
+
 			if (c.pinned) anyPinned = true;
 			else anyUnpinned = true;
+
 			if (anyPinned && anyUnpinned) return true;
 		}
+
 		return false;
 	});
 
 	const visibleSelectionStats = $derived.by(() => {
 		const visibleIds = filteredConversations.map((c) => c.id);
+
 		let selectedVisible = 0;
+
 		for (const id of visibleIds) {
 			if (selectedIds.has(id)) selectedVisible++;
 		}
+
 		return {
-			visibleCount: visibleIds.length,
-			selectedVisibleCount: selectedVisible
+			selectedVisibleCount: selectedVisible,
+			visibleCount: visibleIds.length
 		};
 	});
 
 	function enterSelectionMode(id?: string) {
 		isSelectionMode = true;
+
 		if (id !== undefined) {
 			selectedIds.add(id);
 		}
@@ -188,36 +185,44 @@
 
 	async function handleBulkDelete() {
 		const ids = Array.from(selectedIds);
+
 		if (ids.length === 0) return;
+
 		await conversationsStore.bulkDeleteConversations(ids);
 		exitSelectionMode();
 	}
 
 	async function handleBulkPinToggle() {
 		const ids = Array.from(selectedIds);
+
 		if (ids.length === 0) return;
+
 		await conversationsStore.bulkToggleConversationPin(ids);
 	}
 
 	async function handleBulkExport() {
 		const ids = Array.from(selectedIds);
+
 		if (ids.length === 0) return;
+
 		await conversationsStore.bulkExportConversations(ids);
 	}
 
 	const marquee = useMarqueeSelection({
-		selectedIds: () => selectedIds,
+		enabled: () => isSelectionMode,
 		orderedIds: () => renderedOrderIds,
-		enabled: () => isSelectionMode
+		selectedIds: () => selectedIds
 	});
 
 	function handleRowMouseDown(id: string, event: MouseEvent) {
 		if (!isSelectionMode) return;
+
 		marquee.rowMouseDown(id, event);
 	}
 
 	function handleSelectionClick(id: string, options: { shiftKey: boolean }): void {
 		if (!isSelectionMode) return;
+
 		marquee.rowClick(id, options.shiftKey);
 	}
 
@@ -225,11 +230,13 @@
 		if (isMobile.current) {
 			scheduleMobileCollapse();
 		}
+
 		await goto(RouterService.chat(id));
 	}
 
 	async function handleEditConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
+
 		if (!conversation) return;
 
 		renameTargetConversationId = id;
@@ -240,9 +247,11 @@
 
 	async function handleRenameConfirm() {
 		const id = renameTargetConversationId;
+
 		if (!id) return;
 
 		const nextName = renameDraft.trim();
+
 		if (!nextName || nextName === renameOriginalTitle.trim()) return;
 
 		await conversationsStore.updateConversationName(id, nextName);
@@ -259,12 +268,14 @@
 	}
 
 	async function handleDeleteConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
+
 		if (!conversation) return;
 
 		const confirmed = window.confirm(
 			`Delete "${conversation.name}"? This action cannot be undone.`
 		);
+
 		if (!confirmed) return;
 
 		await conversationsStore.deleteConversation(id, { deleteWithForks: false });
@@ -281,6 +292,7 @@
 		if (pendingCollapse) {
 			clearTimeout(pendingCollapse);
 		}
+
 		pendingCollapse = setTimeout(() => {
 			isExpandedMode = false;
 			pendingCollapse = null;
@@ -311,10 +323,7 @@
 			'rounded-3xl md:rounded-2xl',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding] duration-200 ease-out',
-			// Expanded state: width, surface, depth
-			isStripExpanded &&
-				'md:w-72 md:bg-background/75 md:dark:bg-background/55 md:backdrop-blur-xl border-border/40 dark:border-border/20 shadow-lg glass-backdrop',
-			// Collapsed state
+			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
 			!isStripExpanded && 'md:w-12',
 			isExpandedMode && 'is-expanded'
 		]}
@@ -348,7 +357,7 @@
 					!isExpandedMode
 						? 'opacity-0 h-0!'
 						: ''}"
-					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+					in:fade={{ delay: 50, duration: 150, easing: circIn }}
 					out:fade={{ duration: 100 }}
 				>
 					<ActionIcon
@@ -392,38 +401,8 @@
 				}}
 			/>
 
-		{#if isExpandedMode || isOnMobile}
-			{#if folderOrgEnabled && !isSearchModeActive}
-				<div class="px-2">
-					<SidebarNavigationFolders
-						{activeFolderId}
-						onFolderSelect={(id) => (activeFolderId = id)}
-					/>
-				</div>
-				<div class="px-2">
-					<SidebarNavigationTags />
-				</div>
-				<div class="px-2">
-					<Button
-						variant="ghost"
-						size="sm"
-						class="w-full justify-start gap-2 px-2 h-7 text-xs {conversationsStore.showArchived
-							? 'bg-accent text-accent-foreground'
-							: ''}"
-						onclick={() =>
-							conversationsStore.setShowArchived(!conversationsStore.showArchived)}
-					>
-						{#if conversationsStore.showArchived}
-							<ArchiveRestore class="h-3.5 w-3.5" />
-							<span>Hide archived</span>
-						{:else}
-							<Archive class="h-3.5 w-3.5" />
-							<span>Show archived</span>
-						{/if}
-					</Button>
-				</div>
-			{/if}
-			<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+			{#if isExpandedMode || isOnMobile}
+				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 					<SidebarNavigationConversationList
 						class="px-2"
 						{filteredConversations}

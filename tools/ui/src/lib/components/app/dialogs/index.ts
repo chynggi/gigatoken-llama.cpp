@@ -509,5 +509,3 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
-
-export { default as DialogMcpServerRecommendations } from './DialogMcpServerRecommendations.svelte';

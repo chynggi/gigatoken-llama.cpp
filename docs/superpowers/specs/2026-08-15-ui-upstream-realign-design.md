@@ -253,3 +253,63 @@ Phase 8에서 다음 네 가지를 모두 만족해야 한다.
   리셋이 덜 된 것이다.
 - **Phase 3~7에서 기존 실패가 되살아나면** 재이식 과정에서 같은 결함을 다시 들여온 것이므로
   해당 Phase에서 원인을 규명하고 넘어간다.
+
+## 10. Phase 1 결과 (2026-08-15)
+
+### 실행 내용
+
+`tools/ui` 전체를 `upstream/master`로 리셋했다. 결과적으로 `git diff upstream/master -- tools/ui`가
+빈 출력이며, fork 전용 파일 130개가 제거됐다. `scripts/ui-assets.cmake`의
+`--legacy-peer-deps`도 되돌렸고, upstream 락파일로 `npm ci`가 오류 없이 통과해 제거가
+옳았음이 확인됐다.
+
+### 스펙 §6.1 예상과의 차이
+
+§6.1은 `sharp` 직접 의존성과 `--legacy-peer-deps`를 재적용 대상으로 예상했으나,
+**실제 재적용할 fork 델타는 하나도 없었다.**
+
+| 항목 | §6.1 예상 | 실제 |
+|---|---|---|
+| `svelte.config.js`, `vite.config.ts` | 재적용 없음 | 일치 |
+| `package.json` | `sharp` 직접 의존성 재적용 | **불필요.** upstream도 `overrides`로 전이 해결하며 `npm ci` 통과 |
+| `dependencies.lodash-es` | 미조사 | **미사용 죽은 의존성.** 제거 |
+| `tools/ui/scripts/` 5개 파일 | 실질 델타 재적용 | **전부 노이즈.** 재적용 0건 |
+| `scripts/polyfill-dommatrix.cjs` | fork 전용 파일 유지 검토 | **참조처 0건.** 삭제 |
+| `bun.lock` | 미조사 | fork 전용 산출물. 삭제 |
+| `scripts/ui-assets.cmake` | `--legacy-peer-deps` 유지 | **되돌림.** `sharp` 직접 의존성 제거로 불필요 |
+
+델타의 정체가 밝혀졌다. upstream이 `eslint-plugin-perfectionist`와
+`eslint-plugin-simple-import-sort`를 도입하고 `eslint --fix`를 돌려 **객체 키를 알파벳순
+정렬하고 import를 재배치**했다. upstream의 `format` 스크립트가 `eslint --fix . && prettier --write .`인
+이유이자, fork가 그 `eslint --fix`를 뺀 이유다. 485개 파일 델타의 상당 부분이 실제 발산이
+아니라 이 자동 정렬 churn이다.
+
+이로써 §8의 "`tools/ui/scripts/` 잔여 충돌" 리스크는 소멸했다.
+
+### 게이트 결과
+
+| 게이트 | 기준선 | Phase 1 | 판정 |
+|---|---|---|---|
+| `npm run check` | 12 에러 / 7 파일 | **0 에러 / 0 경고** (6286 파일) | 통과 |
+| `npm run test:client` | 10 실패 / 3 파일 | **20 파일 116 테스트 전부 통과** | 통과 |
+| `npm run test:unit` | 55 파일 699 통과 | 46 파일 631개 중 1건 실패 | 아래 참조 |
+
+기준선의 기존 실패 22건(check 12 + client 10)이 §9에서 예측한 대로 전부 해소됐다.
+
+### 알려진 환경 flake: upstream MCP 단위 테스트 타임아웃
+
+`tools/ui`가 upstream과 바이트 단위로 동일한 상태에서 `test:unit`을 3회 실행한 결과다.
+
+| 회차 | 실패 | 원인 |
+|---|---|---|
+| 1 | `mcp-override-fallback.test.ts` 7건 | `Hook timed out in 10000ms` |
+| 2 | `mcp-default-overrides-merge.test.ts` 1건 | 타임아웃 |
+| 3 | `mcp-default-overrides-merge.test.ts` 1건 | `Test timed out in 5000ms` |
+
+전부 단정 실패가 아닌 **시간 초과**이고, 실패 파일이 회차마다 바뀌며, 단독 실행하면
+`mcp-override-fallback.test.ts` 7건이 모두 통과한다. fork 코드가 전혀 없는 상태에서
+발생하므로 재정렬 작업이 만든 회귀가 아니라 이 머신의 병렬 vitest 부하에서 드러나는
+upstream 테스트의 타임아웃 취약성이다.
+
+**게이트 정책**: `tests/unit/mcp-*.test.ts`의 타임아웃 실패는 환경 요인으로 분류해 신규 실패
+판정에서 제외한다. 단정 실패(`AssertionError`)로 바뀌면 그때는 실제 회귀로 취급한다.

@@ -1,5 +1,6 @@
 import { IDXDB_STORES, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
+import { FORK_STORES } from '$lib/fork/db/fork-stores';
 import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
 import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
@@ -13,10 +14,14 @@ class LlamaUiDatabase extends Dexie {
 		super(STORAGE_APP_NAME);
 
 		this.version(1).stores(IDXDB_STORES);
+		this.version(2).stores({ ...IDXDB_STORES, ...FORK_STORES });
 	}
 }
 
 const db = new LlamaUiDatabase();
+
+/** Fork hook: shared Dexie handle for `$lib/fork` services. */
+export const forkDb = db;
 
 export class DatabaseService {
 	/**

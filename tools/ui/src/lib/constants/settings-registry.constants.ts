@@ -4,6 +4,7 @@ import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
+import { FORK_DISPLAY_SETTINGS, FORK_SETTINGS_REGISTRY } from '$lib/fork/settings/fork-sections';
 import {
 	AlertTriangle,
 	Code,
@@ -304,7 +305,8 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				label: 'Show full path in mentions',
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				type: SettingsFieldType.CHECKBOX
-			}
+			},
+			...FORK_DISPLAY_SETTINGS
 		],
 		slug: SETTINGS_SECTION_SLUGS.DISPLAY,
 		title: SETTINGS_SECTION_TITLES.DISPLAY
@@ -646,8 +648,9 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 		],
 		slug: SETTINGS_SECTION_SLUGS.SAMPLING,
 		title: SETTINGS_SECTION_TITLES.SAMPLING
-	}
-} as const;
+	},
+	...FORK_SETTINGS_REGISTRY
+};
 const NON_UI_SETTINGS: SettingsEntry[] = [
 	{
 		defaultValue: true,

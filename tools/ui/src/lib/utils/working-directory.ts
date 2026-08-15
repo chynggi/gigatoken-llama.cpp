@@ -21,6 +21,7 @@ import {
 	GLOB_WILDCARD,
 	HOME_TILDE,
 	LEADING_SLASHES_REGEX,
+	PATH_NAV_MAX_DEPTH,
 	UNC_ROOT_REGEX,
 	WINDOWS_SEPARATOR
 } from '$lib/constants';
@@ -34,6 +35,33 @@ export interface GlobEntry {
 export interface PathQuery {
 	parent: string;
 	last: string;
+}
+
+export interface GlobSearchArgs {
+	path: string;
+	include: string;
+	maxDepth: number;
+	rankQuery: string;
+	/** Last segment of a path-navigation query (`~/dir/sub`), undefined for
+	 * a plain home-relative glob. Lets callers act on the exact targeted
+	 * segment (e.g. the WD picker "entering" a directory). */
+	last?: string;
+}
+
+export function buildGlobSearchArgs(
+	query: string,
+	scopePath: string,
+	searchDepth: number
+): GlobSearchArgs {
+	const pathQuery = splitPathQuery(query);
+	const path = pathQuery ? pathQuery.parent : scopePath;
+	const include = pathQuery
+		? pathQuery.last
+			? buildCaseInsensitiveGlob(pathQuery.last)
+			: GLOB_WILDCARD
+		: buildCaseInsensitiveGlob(query);
+	const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : searchDepth;
+	return { path, include, maxDepth, rankQuery: pathQuery?.last ?? query, last: pathQuery?.last };
 }
 
 /**

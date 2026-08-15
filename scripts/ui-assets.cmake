@@ -123,9 +123,9 @@ function(npm_build out_var)
     endif()
 
     if(need_install)
-        message(STATUS "UI: running npm ci")
+        message(STATUS "UI: running npm ci --legacy-peer-deps")
         execute_process(
-            COMMAND ${NPM_EXECUTABLE} ci
+            COMMAND ${NPM_EXECUTABLE} ci --legacy-peer-deps
             WORKING_DIRECTORY "${WORK_DIR}"
             RESULT_VARIABLE rc
             ERROR_VARIABLE  err

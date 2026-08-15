@@ -1,3 +1,15 @@
+/** Query params the chat routes read from the URL. */
+export const URL_PARAMS = {
+	/** Prompt to send on arrival. */
+	QUERY: 'q',
+	/** Model to select. */
+	MODEL: 'model',
+	/** Load the selected model instead of waiting for the first message. */
+	LOAD: 'load',
+	/** Start a new chat. */
+	NEW_CHAT: 'new_chat'
+} as const;
+
 export const NEW_CHAT_PARAM = 'new_chat';
 
 /** Settings section slugs — used for routes and navigation. */

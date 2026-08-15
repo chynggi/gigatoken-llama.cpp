@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libcurl4-openssl-dev \
     libssl-dev \
+    ccache \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js for the WebUI (tools/ui) npm build. Vite 7 needs Node >=20.19,
@@ -38,7 +39,11 @@ COPY . .
 RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 
-RUN cmake -S . -B build \
+# ccache cache mount survives between builds, so only changed sources
+# recompile. Same for the npm cache used by the UI build below.
+RUN --mount=type=cache,target=/root/.ccache \
+    --mount=type=cache,target=/root/.npm \
+    cmake -S . -B build \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_CUDA=ON \
@@ -49,6 +54,9 @@ RUN cmake -S . -B build \
     -DLLAMA_BUILD_EXAMPLES=OFF \
     -DLLAMA_BUILD_UI=ON \
     -DLLAMA_USE_PREBUILT_UI=OFF \
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
     && cmake --build build -j 6
 
 # ------------------------------------------------------------

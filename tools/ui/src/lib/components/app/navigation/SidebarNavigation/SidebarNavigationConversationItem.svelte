@@ -1,6 +1,8 @@
 <script lang="ts">
 	import {
 		Download,
+		FileCode2,
+		FileText,
 		GitBranch,
 		ListChecks,
 		Loader2,
@@ -11,6 +13,7 @@
 		Square,
 		Trash2
 	} from '@lucide/svelte';
+	import { downloadConversationHtml, downloadConversationMarkdown } from '$lib/fork/export/download';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -269,6 +272,22 @@
 							conversationsStore.downloadConversation(conversation.id);
 						},
 						shortcut: ['shift', 'cmd', 's']
+					},
+					{
+						icon: FileText,
+						label: 'Export as Markdown',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							downloadConversationMarkdown(conversation.id);
+						}
+					},
+					{
+						icon: FileCode2,
+						label: 'Export as HTML',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							downloadConversationHtml(conversation.id);
+						}
 					},
 					{
 						icon: ListChecks,

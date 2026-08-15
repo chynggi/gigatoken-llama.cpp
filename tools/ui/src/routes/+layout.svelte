@@ -7,6 +7,8 @@
 	import { SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import CommandPalette from '$lib/fork/command-palette/CommandPalette.svelte';
+	import ThemeEffects from '$lib/fork/theme/ThemeEffects.svelte';
 	import {
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
@@ -288,6 +290,10 @@
 	</div>
 
 	<ModeWatcher />
+
+	<ThemeEffects />
+
+	<CommandPalette />
 
 	<Toaster richColors />
 </Tooltip.Provider>

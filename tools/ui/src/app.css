@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 @source '.';
 @plugin '@tailwindcss/forms';
@@ -225,3 +226,6 @@
 .mermaidTooltip {
 	display: none !important;
 }
+
+/* Fork theme layer — must stay last so its re-declarations win on cascade. */
+@import './lib/fork/theme/fork.css';

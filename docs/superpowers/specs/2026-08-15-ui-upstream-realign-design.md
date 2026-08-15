@@ -211,3 +211,45 @@ Phase 8에서 다음 네 가지를 모두 만족해야 한다.
 | `settings-registry` spread 지점 — upstream이 섹션 타입 변경 | `npm run check`가 즉시 타입 에러로 잡음 | 낮음. 조용히 깨지지 않음 |
 | `compose-draft` 훅 — upstream이 `ChatForm` 구조 재개편 시 위치 이동 | 훅이 1~3줄이라 재배치 비용 작음 | 낮음 |
 | `tools/ui/scripts/`의 fork 델타는 격리 대상이 아니라 앞으로도 upstream과 충돌할 수 있음 | Phase 1에서 실질 델타만 남겨 최소화 | 낮음. 파일 6개 규모이고 변경 빈도가 낮음 |
+
+## 9. Phase 0 기준선 (2026-08-15 측정)
+
+측정 대상: `feat/ui-upstream-realign` at `e4da6c423` (= 머지 직후 `tools/ui` 상태).
+환경: node v22.23.1, npm 12.0.1. `test:client`는 Playwright chromium 설치가 필요했으며
+설치 후 측정했다. 동일 조건 2회 실행에서 결과가 완전히 일치해 결정적임을 확인했다.
+
+| 게이트 | 결과 |
+|---|---|
+| `npm run check` | **12 에러 / 7 파일** (6082 파일 검사, 경고 0) |
+| `npm run test:unit -- --run` | **전부 통과** — 55 파일, 699 테스트 |
+| `npm run test:client -- --run` | **10 테스트 / 3 파일 실패**, 107 통과 (20 파일, 117 테스트, 약 92초) |
+
+### 기존 실패 목록
+
+이후 게이트에서 아래 항목은 "기존 실패"로 취급해 신규 실패 판정에서 제외한다.
+
+`npm run check` (12건):
+
+| 파일 | 위치 |
+|---|---|
+| `src/lib/components/app/chat/ChatForm/ChatForm.svelte` | 657:4, 658:4 |
+| `src/lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormCommandPicker.svelte` | 43:32, 115:19 |
+| `src/lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte` | 194:5 |
+| `src/lib/components/app/content/MarkdownContent/plugins/rehype/file-badge.ts` | 91:47 |
+| `src/lib/stores/settings.svelte.ts` | 147:25, 149:33, 151:33 |
+| `src/lib/types/index.ts` | 57:2, 58:2 |
+| `src/lib/utils/contenteditable-tokenizer.ts` | 517:42 |
+
+`npm run test:client` (10건, 3파일): `collapsible-lazy-body.svelte.test.ts`,
+`settings-raw-text-migration.svelte.test.ts`, `settings-registry-invariants.svelte.test.ts`
+
+### 관찰: 추가 검증 축
+
+기존 실패가 전부 fork 개조 영역(settings 레지스트리·설정 스토어·ChatForm·
+`use-throttle` 소비자인 collapsible)에 몰려 있다. 이들은 Phase 1에서 upstream 원본으로
+리셋되거나(대부분) 폐기되는(`use-throttle`) 대상이므로 다음 두 기대를 게이트에 추가한다.
+
+- **Phase 1 종료 시 기존 실패 22건(check 12 + client 10)이 전부 사라져야 한다.** 남으면
+  리셋이 덜 된 것이다.
+- **Phase 3~7에서 기존 실패가 되살아나면** 재이식 과정에서 같은 결함을 다시 들여온 것이므로
+  해당 Phase에서 원인을 규명하고 넘어간다.

@@ -2,15 +2,18 @@
 	import { ArrowLeft, Plus, Trash2, Play, Pencil } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
-	import { presetsStore } from '$lib/stores/presets.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import type { DatabasePreset } from '$lib/fork/db/types';
+	import { presetsStore } from '$lib/fork/packs/presets.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ROUTES, SETTINGS_KEYS } from '$lib/constants';
+	import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
 	import {
 		PRESET_SAMPLING_KEYS,
 		collectSamplingParamsFromForm,
+		deriveMcpOverridesFromServers,
 		parseMcpOverridesJson,
 		type PresetSamplingKey
-	} from '$lib/utils/preset-apply';
+	} from '$lib/fork/packs/preset-apply';
 	import { toast } from 'svelte-sonner';
 
 	const packEnabled = $derived(presetsStore.enabled);
@@ -47,7 +50,7 @@
 	}
 
 	function fillFromCurrentSettings() {
-		const c = config();
+		const c = settingsStore.config;
 		systemMessage = String(c[SETTINGS_KEYS.SYSTEM_MESSAGE] ?? '');
 		const next: Partial<Record<PresetSamplingKey, string>> = {};
 		for (const key of PRESET_SAMPLING_KEYS) {
@@ -57,9 +60,12 @@
 			}
 		}
 		samplingFields = next;
-		mcpOverridesJson = String(c[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES] ?? '');
-		webSearchEnabled = Boolean(c[SETTINGS_KEYS.WEB_SEARCH_ENABLED]);
-		webSearchProvider = String(c[SETTINGS_KEYS.WEB_SEARCH_ACTIVE_PROVIDER] ?? '');
+		const rawServers = c[SETTINGS_KEYS.MCP_SERVERS];
+		const currentOverrides =
+			typeof rawServers === 'string' ? deriveMcpOverridesFromServers(rawServers) : undefined;
+		mcpOverridesJson = currentOverrides ? JSON.stringify(currentOverrides, null, 2) : '';
+		webSearchEnabled = Boolean(c[FORK_SETTINGS_KEYS.WEB_SEARCH_ENABLED]);
+		webSearchProvider = String(c[FORK_SETTINGS_KEYS.WEB_SEARCH_ACTIVE_PROVIDER] ?? '');
 	}
 
 	function startCreate() {

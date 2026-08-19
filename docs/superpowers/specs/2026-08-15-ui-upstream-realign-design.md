@@ -211,3 +211,172 @@ Phase 8에서 다음 네 가지를 모두 만족해야 한다.
 | `settings-registry` spread 지점 — upstream이 섹션 타입 변경 | `npm run check`가 즉시 타입 에러로 잡음 | 낮음. 조용히 깨지지 않음 |
 | `compose-draft` 훅 — upstream이 `ChatForm` 구조 재개편 시 위치 이동 | 훅이 1~3줄이라 재배치 비용 작음 | 낮음 |
 | `tools/ui/scripts/`의 fork 델타는 격리 대상이 아니라 앞으로도 upstream과 충돌할 수 있음 | Phase 1에서 실질 델타만 남겨 최소화 | 낮음. 파일 6개 규모이고 변경 빈도가 낮음 |
+
+## 9. Phase 0 기준선 (2026-08-15 측정)
+
+측정 대상: `feat/ui-upstream-realign` at `e4da6c423` (= 머지 직후 `tools/ui` 상태).
+환경: node v22.23.1, npm 12.0.1. `test:client`는 Playwright chromium 설치가 필요했으며
+설치 후 측정했다. 동일 조건 2회 실행에서 결과가 완전히 일치해 결정적임을 확인했다.
+
+| 게이트 | 결과 |
+|---|---|
+| `npm run check` | **12 에러 / 7 파일** (6082 파일 검사, 경고 0) |
+| `npm run test:unit -- --run` | **전부 통과** — 55 파일, 699 테스트 |
+| `npm run test:client -- --run` | **10 테스트 / 3 파일 실패**, 107 통과 (20 파일, 117 테스트, 약 92초) |
+
+### 기존 실패 목록
+
+이후 게이트에서 아래 항목은 "기존 실패"로 취급해 신규 실패 판정에서 제외한다.
+
+`npm run check` (12건):
+
+| 파일 | 위치 |
+|---|---|
+| `src/lib/components/app/chat/ChatForm/ChatForm.svelte` | 657:4, 658:4 |
+| `src/lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormCommandPicker.svelte` | 43:32, 115:19 |
+| `src/lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte` | 194:5 |
+| `src/lib/components/app/content/MarkdownContent/plugins/rehype/file-badge.ts` | 91:47 |
+| `src/lib/stores/settings.svelte.ts` | 147:25, 149:33, 151:33 |
+| `src/lib/types/index.ts` | 57:2, 58:2 |
+| `src/lib/utils/contenteditable-tokenizer.ts` | 517:42 |
+
+`npm run test:client` (10건, 3파일): `collapsible-lazy-body.svelte.test.ts`,
+`settings-raw-text-migration.svelte.test.ts`, `settings-registry-invariants.svelte.test.ts`
+
+### 관찰: 추가 검증 축
+
+기존 실패가 전부 fork 개조 영역(settings 레지스트리·설정 스토어·ChatForm·
+`use-throttle` 소비자인 collapsible)에 몰려 있다. 이들은 Phase 1에서 upstream 원본으로
+리셋되거나(대부분) 폐기되는(`use-throttle`) 대상이므로 다음 두 기대를 게이트에 추가한다.
+
+- **Phase 1 종료 시 기존 실패 22건(check 12 + client 10)이 전부 사라져야 한다.** 남으면
+  리셋이 덜 된 것이다.
+- **Phase 3~7에서 기존 실패가 되살아나면** 재이식 과정에서 같은 결함을 다시 들여온 것이므로
+  해당 Phase에서 원인을 규명하고 넘어간다.
+
+## 10. Phase 1 결과 (2026-08-15)
+
+### 실행 내용
+
+`tools/ui` 전체를 `upstream/master`로 리셋했다. 결과적으로 `git diff upstream/master -- tools/ui`가
+빈 출력이며, fork 전용 파일 130개가 제거됐다. `scripts/ui-assets.cmake`의
+`--legacy-peer-deps`도 되돌렸고, upstream 락파일로 `npm ci`가 오류 없이 통과해 제거가
+옳았음이 확인됐다.
+
+### 스펙 §6.1 예상과의 차이
+
+§6.1은 `sharp` 직접 의존성과 `--legacy-peer-deps`를 재적용 대상으로 예상했으나,
+**실제 재적용할 fork 델타는 하나도 없었다.**
+
+| 항목 | §6.1 예상 | 실제 |
+|---|---|---|
+| `svelte.config.js`, `vite.config.ts` | 재적용 없음 | 일치 |
+| `package.json` | `sharp` 직접 의존성 재적용 | **불필요.** upstream도 `overrides`로 전이 해결하며 `npm ci` 통과 |
+| `dependencies.lodash-es` | 미조사 | **미사용 죽은 의존성.** 제거 |
+| `tools/ui/scripts/` 5개 파일 | 실질 델타 재적용 | **전부 노이즈.** 재적용 0건 |
+| `scripts/polyfill-dommatrix.cjs` | fork 전용 파일 유지 검토 | **참조처 0건.** 삭제 |
+| `bun.lock` | 미조사 | fork 전용 산출물. 삭제 |
+| `scripts/ui-assets.cmake` | `--legacy-peer-deps` 유지 | **되돌림.** `sharp` 직접 의존성 제거로 불필요 |
+
+델타의 정체가 밝혀졌다. upstream이 `eslint-plugin-perfectionist`와
+`eslint-plugin-simple-import-sort`를 도입하고 `eslint --fix`를 돌려 **객체 키를 알파벳순
+정렬하고 import를 재배치**했다. upstream의 `format` 스크립트가 `eslint --fix . && prettier --write .`인
+이유이자, fork가 그 `eslint --fix`를 뺀 이유다. 485개 파일 델타의 상당 부분이 실제 발산이
+아니라 이 자동 정렬 churn이다.
+
+이로써 §8의 "`tools/ui/scripts/` 잔여 충돌" 리스크는 소멸했다.
+
+### 게이트 결과
+
+| 게이트 | 기준선 | Phase 1 | 판정 |
+|---|---|---|---|
+| `npm run check` | 12 에러 / 7 파일 | **0 에러 / 0 경고** (6286 파일) | 통과 |
+| `npm run test:client` | 10 실패 / 3 파일 | **20 파일 116 테스트 전부 통과** | 통과 |
+| `npm run test:unit` | 55 파일 699 통과 | 46 파일 631개 중 1건 실패 | 아래 참조 |
+
+기준선의 기존 실패 22건(check 12 + client 10)이 §9에서 예측한 대로 전부 해소됐다.
+
+### 알려진 환경 flake: upstream MCP 단위 테스트 타임아웃
+
+`tools/ui`가 upstream과 바이트 단위로 동일한 상태에서 `test:unit`을 3회 실행한 결과다.
+
+| 회차 | 실패 | 원인 |
+|---|---|---|
+| 1 | `mcp-override-fallback.test.ts` 7건 | `Hook timed out in 10000ms` |
+| 2 | `mcp-default-overrides-merge.test.ts` 1건 | 타임아웃 |
+| 3 | `mcp-default-overrides-merge.test.ts` 1건 | `Test timed out in 5000ms` |
+
+전부 단정 실패가 아닌 **시간 초과**이고, 실패 파일이 회차마다 바뀌며, 단독 실행하면
+`mcp-override-fallback.test.ts` 7건이 모두 통과한다. fork 코드가 전혀 없는 상태에서
+발생하므로 재정렬 작업이 만든 회귀가 아니라 이 머신의 병렬 vitest 부하에서 드러나는
+upstream 테스트의 타임아웃 취약성이다.
+
+**게이트 정책**: `tests/unit/mcp-*.test.ts`의 타임아웃 실패는 환경 요인으로 분류해 신규 실패
+판정에서 제외한다. 단정 실패(`AssertionError`)로 바뀌면 그때는 실제 회귀로 취급한다.
+
+**추가 게이트 규칙 (Phase 4에서 발견)**: `test:unit`과 `test:client`를 한 명령에 이어서
+실행하면 `agentic-stream.perf.svelte.test.ts`가 부하로 타임아웃한다. 게이트는 기준선과 같은
+조건, 즉 각각 단독으로 실행한다.
+
+## 11. Phase 2~8 결과 (2026-08-15)
+
+### 최종 완료 판정
+
+| # | 기준 | 결과 |
+|---|---|---|
+| 1 | upstream 원본 수정 10파일 이하 | **6파일** — 충족 |
+| 2 | 기준선 대비 신규 실패 0건 | check 0에러, client 116 통과, unit은 알려진 flake 1건 — 충족 |
+| 3 | 폐기 대상 참조 0건 | 10개 항목 전부 0건 — 충족 |
+| 4 | 유지 기능 5묶음 존재 | 11개 진입점 확인 — 충족 |
+
+시작 시점의 485개 파일 수정이 6개 파일로 줄었다. fork 코드는 `$lib/fork/` 아래 29개 파일에 모여 있다.
+
+### upstream 원본 수정 6파일
+
+| 파일 | 델타 | 성격 | 5줄 기준 |
+|---|---|---|---|
+| `lib/components/app/chat/ChatScreen/ChatScreen.svelte` | +3 | SearchResultsPreview 마운트 | 충족 |
+| `app.css` | +4 | 폰트 `@import`, `fork.css` `@import` | 충족 |
+| `lib/services/database.service.ts` | +5 | `version(2)`, `forkDb` export | 충족 |
+| `routes/+layout.svelte` | +6 | CommandPalette·ThemeEffects 마운트 | 초과 |
+| `lib/constants/settings-registry.constants.ts` | +6/-3 | import + spread 2곳 (실질 3줄) | 초과 |
+| `lib/components/app/navigation/SidebarNavigation/SidebarNavigationConversationItem.svelte` | +19 | 내보내기 메뉴 항목 2개 | 초과 |
+
+**5줄 기준에 대한 정정**: 이 숫자는 설계 단계에서 근거 없이 잡은 값이었다. 실제로는
+`+layout.svelte`와 `settings-registry`는 import·spread·마운트라 사실상 훅이고,
+`SidebarNavigationConversationItem`의 +19는 메뉴 항목이 객체 리터럴이라 압축이 불가능한
+구조적 한계다. 셋 다 순수 추가이며 upstream 라인을 지우지 않는다. 파일 수 기준이 실질적인
+지표이고, 줄 수 기준은 참고값으로 낮춰 읽는 것이 맞다.
+
+**upstream 의미를 건드린 유일한 지점**: `settings-registry.constants.ts`의
+`SETTINGS_REGISTRY`가 `} as const;`에서 `};`로 바뀌었다. non-const `Record`를 spread하면
+`as const`와 충돌해 불가피했다. 타입 검사 0에러로 리터럴 타입 의존이 없음을 확인했다.
+
+### 설계에서 벗어난 결정
+
+| Phase | 설계 | 실제 | 이유 |
+|---|---|---|---|
+| 1 | `sharp` 직접 의존성과 `--legacy-peer-deps` 재적용 | 재적용 0건, 되돌림 | upstream도 `overrides`로 전이 해결하며 `npm ci` 통과. `lodash-es`는 미사용 죽은 의존성. `scripts/` 델타는 eslint 자동 정렬 churn |
+| 2 | 훅 2곳 (`database.service.ts`, `database.constants.ts`) | 1곳 | `FORK_STORES`를 fork 쪽에 두면 상수 파일을 건드릴 이유가 없다 |
+| 3 | `search.ts`는 Phase 4 | Phase 3으로 이동 | search-providers 스토어가 의존. 검색 엔진은 Packs의 토대 |
+| 3 | 설정은 전부 Phase 7 | 키는 Phase 3, 레지스트리만 Phase 7 | 스토어들이 fork 설정 키를 먼저 필요로 함 |
+| 3 | 이동만 | 프리셋 MCP 처리 재작성 | upstream이 `mcp-default-overrides-merge-v1` 마이그레이션으로 `mcpServers[i].enabled`를 단일 진실원으로 삼았다. 결과적으로 conversations 스토어 델타가 0이 됨 |
+| 5 | 내보내기/가져오기 재작성 + 스냅샷 비교 | Markdown/HTML만, 명세 테스트 | 포맷터는 이미 순수 함수였고 JSON 경로는 upstream이 이미 보유. 그대로 옮기는데 자기 출력과 비교하는 것은 순환 논증 |
+| 6 | `app.css` 완전 격리 불가 | 격리 성공 (524줄 분리, 2줄만 잔류) | "삭제"로 보인 2줄이 실제로는 수정이라 캐스케이드 재선언으로 대체 가능 |
+| 6 | `compose-draft` 훅 유지 | draft 슬롯 방식으로 축소 | `COMPOSE_CHAT_INPUT_EVENT`는 리스너 없는 죽은 경로였고, upstream `afterNavigate`가 이미 복원한다. `use-draft-messages.svelte.ts` 36줄 수정을 회피 |
+
+### 폐기한 기능
+
+Folders/Tags, MCP 추천 다이얼로그, `use-throttle`. 관련 참조는 0건이며 Dexie `folders`
+테이블은 선언만 남아 데이터가 보존된다.
+
+### 남은 위험
+
+**`app.css`/`fork.css`는 게이트가 검증하지 못한다.** `check`도 vitest도 CSS 캐스케이드를
+보지 않는다. 테마 7종, 글래스 효과, 채팅 폭 3모드, accent 7색은 육안 확인이 필요하다.
+
+**컴포넌트 테스트가 없는 6개** — `CommandPalette`, `ThemeEffects`, `ModelLogo`,
+`SearchResultsPreview`, 라우트 3개 — 는 타입 검사만이 방어선이다.
+
+**빌드는 수행하지 않았다.** 사용자 지시로 C++ 검증 빌드를 금지했고, `npm run build`도
+돌리지 않았다. `svelte-check`는 통과하지만 프로덕션 번들이 만들어지는지는 미확인이다.

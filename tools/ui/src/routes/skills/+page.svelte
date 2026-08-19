@@ -2,7 +2,8 @@
 	import { ArrowLeft, Plus, Trash2, Pencil, Save } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
-	import { skillsStore } from '$lib/stores/skills.svelte';
+	import type { DatabaseSkill } from '$lib/fork/db/types';
+	import { skillsStore } from '$lib/fork/packs/skills.svelte';
 	import { ROUTES } from '$lib/constants';
 	import { onMount } from 'svelte';
 

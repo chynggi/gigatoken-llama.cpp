@@ -2,14 +2,15 @@
 	import { ArrowLeft, Plus, Trash2, Globe, ToggleLeft, ToggleRight } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
-	import { searchProvidersStore } from '$lib/stores/search-providers.svelte';
-	import { SEARCH_PROVIDERS } from '$lib/utils/search';
+	import type { SearchProviderType } from '$lib/fork/db/types';
+	import { searchProvidersStore } from '$lib/fork/packs/search-providers.svelte';
+	import { SEARCH_PROVIDERS } from '$lib/fork/search/search';
 	import { ROUTES } from '$lib/constants';
 
 	const packEnabled = $derived(searchProvidersStore.enabled);
 
 	let showAddForm = $state(false);
-	let selectedType = $state('searxng');
+	let selectedType = $state<SearchProviderType>('searxng');
 	let newApiKey = $state('');
 	let newBaseUrl = $state('');
 
@@ -24,7 +25,7 @@
 		if (info.requiresBaseUrl && !newBaseUrl.trim()) return;
 
 		await searchProvidersStore.addProvider({
-			type: selectedType as SearchProviderType,
+			type: selectedType,
 			name: info.name,
 			enabled: true,
 			apiKey: newApiKey.trim() || undefined,

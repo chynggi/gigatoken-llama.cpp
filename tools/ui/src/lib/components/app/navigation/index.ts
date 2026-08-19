@@ -202,9 +202,3 @@ export { default as SidebarNavigationSearchResults } from './SidebarNavigation/S
  * Integrated into sidebar header with proper styling.
  */
 export { default as SidebarNavigationSearch } from './SidebarNavigation/SidebarNavigationSearch.svelte';
-
-/** Folder tree section in sidebar for organizing conversations */
-export { default as SidebarNavigationFolders } from './SidebarNavigation/SidebarNavigationFolders.svelte';
-
-/** Tag filter chips bar in sidebar */
-export { default as SidebarNavigationTags } from './SidebarNavigation/SidebarNavigationTags.svelte';

@@ -4,8 +4,8 @@ import {
 	applySkillTemplate,
 	missingPlaceholders,
 	rankSkills
-} from '$lib/utils/skill-engine';
-import type { DatabaseSkill } from '$lib/types/database';
+} from '$lib/fork/packs/skill-engine';
+import type { DatabaseSkill } from '$lib/fork/db/types';
 
 function makeSkill(overrides: Partial<DatabaseSkill> = {}): DatabaseSkill {
 	return {

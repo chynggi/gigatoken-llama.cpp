@@ -1,110 +1,55 @@
 <script lang="ts">
 	import {
-		ChatMessageAgenticContent,
 		ChatMessageActionIcons,
+		ChatMessageAgenticContent,
 		ChatMessageAssistantModel,
 		ChatMessageAssistantProcessingInfo,
 		ChatMessageAssistantRawOutput,
 		ChatMessageAssistantStatistics,
-		ChatMessageEditForm,
-		ModelLogo
+		ChatMessageEditForm
 	} from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { modelLoadProgressText } from '$lib/utils';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants';
-
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { chatStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
+	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 
 	interface Props {
 		class?: string;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
 		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
-		onCopy: () => void;
-		onConfirmDelete: () => void;
 		onContinue?: () => void;
-		onDelete: () => void;
-		onEdit?: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
-		showDeleteDialog: boolean;
-		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 	}
 
 	let {
 		class: className = '',
-		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
-		toolMessages = [],
-		onConfirmDelete,
 		onContinue,
-		onCopy,
-		onDelete,
-		onEdit,
-		onForkConversation,
-		onNavigateToSibling,
 		onRegenerate,
-		onShowDeleteDialogChange,
-		showDeleteDialog,
-		siblingInfo = null,
-		textareaElement = $bindable()
+		textareaElement = $bindable(),
+		toolMessages = []
 	}: Props = $props();
 
-	const editCtx = getMessageEditContext();
+	// Get edit context
+	const editCtx = getChatMessageEditContext();
 
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const processingState = useProcessingState();
 
-	let currentConfig = $derived(config());
-	let isRouter = $derived(isRouterMode());
+	let currentConfig = $derived(settingsStore.config);
+	let isRouter = $derived(serverStore.isRouterMode);
 
 	let showRawOutput = $state(false);
-	let showModelResponseLogo = $derived(
-		Boolean(currentConfig[SETTINGS_KEYS.SHOW_MODEL_RESPONSE_LOGO] ?? true)
-	);
 
 	let displayedModel = $derived(message.model ?? null);
-	let logoModelHint = $derived(
-		displayedModel ??
-			modelsStore.selectedModelName ??
-			modelsStore.singleModelName ??
-			serverStore.props?.model_path ??
-			null
-	);
-	let logoArchitecture = $derived.by(() => {
-		const fromProps = serverStore.props?.model_architecture;
-		if (fromProps) return fromProps;
 
-		const modelKey = displayedModel ?? modelsStore.selectedModelName;
-		if (!modelKey || !isRouter) return null;
-
-		const entry = modelsStore.routerModels.find(
-			(m) => m.id === modelKey || m.name === modelKey || m.aliases?.includes(modelKey)
-		);
-		const arch = entry?.meta?.architecture;
-		return typeof arch === 'string' && arch.length > 0 ? arch : null;
-	});
-	let logoChatTemplate = $derived(serverStore.props?.chat_template ?? null);
-	let logoModelAlias = $derived(serverStore.props?.model_alias ?? null);
-
-	let isCurrentlyLoading = $derived(isLoading());
-	let isStreaming = $derived(isChatStreaming());
+	let isCurrentlyLoading = $derived(chatStore.isLoading);
+	let isStreaming = $derived(chatStore.isStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
@@ -150,18 +95,21 @@
 
 		if (!userMessageEl) {
 			lastUserMessageHeight = 0;
+
 			return;
 		}
 
 		const updateHeight = () => {
 			const rect = userMessageEl.getBoundingClientRect();
 			const marginTop = Math.round(parseFloat(getComputedStyle(userMessageEl).marginTop));
+
 			lastUserMessageHeight = Math.round(rect.height + marginTop);
 		};
 
 		updateHeight();
 
 		const resizeObserver = new ResizeObserver(updateHeight);
+
 		resizeObserver.observe(userMessageEl);
 
 		return () => {
@@ -178,10 +126,7 @@
 
 <div
 	bind:this={assistantEl}
-	class="chat-message-assistant text-md group w-full leading-7.5 {className} {isLastAssistantMessage &&
-	isChatStreaming()
-		? 'glass-glow-pulse rounded-2xl'
-		: ''}"
+	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
 	style:--last-user-message-height={lastUserMessageHeight > 0
 		? `${lastUserMessageHeight}px`
 		: undefined}
@@ -196,74 +141,49 @@
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		<div class="flex w-full items-start gap-3">
-			{#if showModelResponseLogo}
-				<ModelLogo
-					class="mt-1"
-					model={logoModelHint}
-					architecture={logoArchitecture}
-					chatTemplate={logoChatTemplate}
-					modelAlias={logoModelAlias}
-					size="md"
-				/>
-			{/if}
-
-			<div class="min-w-0 flex-1">
-				{#if showRawOutput}
-					<ChatMessageAssistantRawOutput {message} {toolMessages} />
-				{:else}
-					<ChatMessageAgenticContent
-						{message}
-						{toolMessages}
-						isStreaming={isChatStreaming()}
-						{isLastAssistantMessage}
-					/>
-				{/if}
-			</div>
-		</div>
+		{#if showRawOutput}
+			<ChatMessageAssistantRawOutput {message} {toolMessages} />
+		{:else}
+			<ChatMessageAgenticContent
+				{message}
+				{toolMessages}
+				isStreaming={chatStore.isStreaming()}
+				{isLastAssistantMessage}
+			/>
+		{/if}
 	{/if}
 
 	{#if showProcessingInfoBottom}
 		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="bottom" />
 	{/if}
 
-	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel}
+	{#if displayedModel}
+		<div class="info my-6 grid gap-4 tabular-nums">
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
-					isLoading={isLoading()}
+					isLoading={chatStore.isLoading}
 					{isRouter}
 					{onRegenerate}
 				/>
 
 				<ChatMessageAssistantStatistics
 					{message}
-					isLoading={isLoading()}
+					isLoading={chatStore.isLoading}
 					{processingState}
 					showMessageStats={currentConfig.showMessageStats}
 				/>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 
 	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActionIcons
 			role={MessageRole.ASSISTANT}
 			justify="start"
 			actionsPosition="left"
-			{siblingInfo}
-			{showDeleteDialog}
-			{deletionInfo}
-			{onCopy}
-			{onEdit}
 			{onRegenerate}
 			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
-			{onForkConversation}
-			{onDelete}
-			{onConfirmDelete}
-			{onNavigateToSibling}
-			{onShowDeleteDialogChange}
 			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
@@ -286,58 +206,6 @@
 					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
 					var(--assistant-margin-top, 3rem)
 			);
-		}
-	}
-
-	.processing-container {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.5rem;
-	}
-
-	.processing-text {
-		background: linear-gradient(
-			90deg,
-			var(--muted-foreground),
-			var(--foreground),
-			var(--muted-foreground)
-		);
-		background-size: 200% 100%;
-		background-clip: text;
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		animation: shine 1s linear infinite;
-		font-weight: 500;
-		font-size: 0.875rem;
-	}
-
-	@keyframes shine {
-		to {
-			background-position: -200% 0;
-		}
-	}
-
-	.raw-output {
-		width: 100%;
-		max-width: 48rem;
-		margin-top: 1.5rem;
-		padding: 1rem 1.25rem;
-		border-radius: 1rem;
-		background: hsl(var(--muted) / 0.3);
-		color: var(--foreground);
-		font-size: 0.875rem;
-		line-height: 1.6;
-		white-space: pre-wrap;
-		word-break: break-word;
-	}
-
-	@media (min-width: 1536px) {
-		:global(html.wide-chat-mode) .raw-output {
-			max-width: 64rem;
-		}
-		:global(html.full-chat-mode) .raw-output {
-			max-width: 100%;
 		}
 	}
 </style>

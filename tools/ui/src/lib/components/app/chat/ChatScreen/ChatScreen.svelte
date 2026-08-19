@@ -1,50 +1,40 @@
 <script lang="ts">
+	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
+	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
+	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 	import { page } from '$app/state';
 	import {
-		ChatScreenForm,
 		ChatMessages,
 		ChatScreenDragOverlay,
-		ChatScreenStreamResumeStatus,
-		ServerLoadingSplash,
+		ChatScreenForm,
 		ChatScreenServerError,
-		SearchResultsPreview
+		ChatScreenStreamResumeStatus,
+		ServerLoadingSplash
 	} from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import { Expand, Maximize2, Minimize2 } from '@lucide/svelte';
+	import { LANDING_SETTLE_MAX_MS, LANDING_STABLE_FRAMES, ROUTES } from '$lib/constants';
+	import SearchResultsPreview from '$lib/fork/search/SearchResultsPreview.svelte';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
 	import { useChatScreenFileUpload } from '$lib/hooks/use-chat-screen-file-upload.svelte';
 	import { useChatScreenScroll } from '$lib/hooks/use-chat-screen-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { device } from '$lib/stores/device.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
 	import {
 		chatStore,
-		errorDialog,
-		isLoading,
-		isChatStreaming,
-		isEditing
-	} from '$lib/stores/chat.svelte';
-	import {
 		conversationsStore,
-		activeMessages,
-		activeConversation
-	} from '$lib/stores/conversations.svelte';
-	import { searchProvidersStore } from '$lib/stores/search-providers.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { serverLoading, serverError } from '$lib/stores/server.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants';
+		device,
+		isMobile,
+		serverStore,
+		settingsStore
+	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { onDestroy, onMount, tick } from 'svelte';
-	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
-	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
-	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
-	import { LANDING_SETTLE_MAX_MS, LANDING_STABLE_FRAMES, ROUTES } from '$lib/constants';
 
 	let { showCenteredEmpty = false } = $props();
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
+	let disableAutoScroll = $derived(
+		Boolean(settingsStore.config.disableAutoScroll) || isMobile.current
+	);
 	let isMobileUserScrolledUp = $state(false);
 	let mobileScrollDownHint = $state(false);
 	let mobileScrollDownHintLockedUntil = $state(0);
@@ -53,17 +43,22 @@
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
-		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
+		showCenteredEmpty &&
+			!conversationsStore.activeConversation &&
+			conversationsStore.activeMessages.length === 0 &&
+			!chatStore.isLoading
 	);
-	let activeErrorDialog = $derived(errorDialog());
-	let isServerLoading = $derived(serverLoading());
-	let hasPropsError = $derived(!!serverError());
-	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
-	let chatWidthStyle = $derived(String(config()[SETTINGS_KEYS.CHAT_WIDTH_STYLE] ?? 'normal'));
+	let activeErrorDialog = $derived(chatStore.errorDialogState);
+	let isServerLoading = $derived(serverStore.loading);
+	let hasPropsError = $derived(!!serverStore.error);
+	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!isMobile.current) return '1rem';
+
 		if (device.isStandalone) return '1.5rem';
+
 		if (device.isIOSSafari) return '0.25rem';
+
 		return '0.5rem';
 	});
 
@@ -71,19 +66,19 @@
 	const scroll = useChatScreenScroll(autoScroll);
 	const activeModel = useChatScreenActiveModel();
 	const fileUpload = useChatScreenFileUpload({
+		activeModelId: () => activeModel.activeModelId,
 		capabilities: () => ({
-			hasVision: activeModel.hasVisionModality,
 			hasAudio: activeModel.hasAudioModality,
-			hasVideo: activeModel.hasVideoModality
-		}),
-		activeModelId: () => activeModel.activeModelId
+			hasVideo: activeModel.hasVideoModality,
+			hasVision: activeModel.hasVisionModality
+		})
 	});
 	const dragAndDrop = useChatScreenDragAndDrop({
 		onDrop: fileUpload.handleFileUpload
 	});
 	const { handleKeydown } = useKeyboardShortcuts({
 		deleteActiveConversation: () => {
-			if (activeConversation()) {
+			if (conversationsStore.activeConversation) {
 				showDeleteDialog = true;
 			}
 		}
@@ -93,15 +88,17 @@
 		if (!isMobile.current) return;
 
 		const container = scroll.chatScrollContainer;
+
 		if (!container) return;
 
 		const distanceFromBottom =
 			container.scrollHeight - container.clientHeight - container.scrollTop;
+
 		isMobileUserScrolledUp = distanceFromBottom > 300;
 	}
 
 	async function handleDeleteConfirm() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
 			await conversationsStore.deleteConversation(conversation.id);
@@ -119,18 +116,22 @@
 		if (result?.emptyFiles && result.emptyFiles.length > 0) {
 			emptyFileNames = result.emptyFiles;
 			showEmptyFileDialog = true;
+
 			if (files) {
 				const emptyFileNamesSet = new Set(result.emptyFiles);
+
 				fileUpload.uploadedFiles = fileUpload.uploadedFiles.filter(
 					(file) => !emptyFileNamesSet.has(file.name)
 				);
 			}
+
 			return false;
 		}
 
 		handleSendLikeScroll();
 
 		await chatStore.sendMessage(message, result?.extras);
+
 		return true;
 	}
 
@@ -144,28 +145,42 @@
 	// height settles, bailing out on user scroll or conversation change.
 	async function handleMessagesReady(messageCount: number) {
 		if (messageCount === 0) return;
-		const id = activeConversation()?.id ?? null;
+
+		const id = conversationsStore.activeConversation?.id ?? null;
+
 		if (!id || id === lastScrolledConversationId) return;
+
 		lastScrolledConversationId = id;
 		await tick();
 		autoScroll.scrollToBottom();
 
 		const container = scroll.chatScrollContainer;
+
 		if (!container) return;
+
 		const started = performance.now();
+
 		let stableFrames = 0;
 		let lastHeight = container.scrollHeight;
+
 		const settle = () => {
 			if (autoScroll.userScrolledUp) return;
-			if (activeConversation()?.id !== id) return;
+
+			if (conversationsStore.activeConversation?.id !== id) return;
+
 			autoScroll.scrollToBottom();
 			const height = container.scrollHeight;
+
 			stableFrames = height === lastHeight ? stableFrames + 1 : 0;
 			lastHeight = height;
+
 			if (stableFrames >= LANDING_STABLE_FRAMES) return;
+
 			if (performance.now() - started > LANDING_SETTLE_MAX_MS) return;
+
 			requestAnimationFrame(settle);
 		};
+
 		requestAnimationFrame(settle);
 	}
 
@@ -176,6 +191,7 @@
 
 		setTimeout(() => {
 			const container = scroll.chatScrollContainer;
+
 			if (!container) return;
 
 			const lastUserBubble = container.querySelector(
@@ -188,16 +204,17 @@
 				const baseHeight = container.scrollHeight - innerHeight;
 
 				container.scrollTo({
-					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
-					behavior: 'smooth'
+					behavior: 'smooth',
+					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight
 				});
 			} else if (lastUserBubble) {
 				// On desktop, place the last user message near the top of the viewport
 				const topPadding = 24;
 				const bubbleRect = lastUserBubble.getBoundingClientRect();
+
 				container.scrollTo({
-					top: Math.max(0, container.scrollTop + bubbleRect.top - topPadding),
-					behavior: 'smooth'
+					behavior: 'smooth',
+					top: Math.max(0, container.scrollTop + bubbleRect.top - topPadding)
 				});
 			} else {
 				autoScroll.scrollToBottom();
@@ -221,26 +238,24 @@
 		if (draft.message || draft.files.length > 0) {
 			chatStore.savePendingDraft(draft.message, draft.files);
 		}
+
 		await chatStore.addSystemPrompt();
 	}
 
 	$effect(() => {
 		const shouldDisableAutoScroll =
-			config().disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
+			settingsStore.config.disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
+
 		autoScroll.setDisabled(shouldDisableAutoScroll);
+
 		if (!shouldDisableAutoScroll) {
 			autoScroll.enable();
 		}
 	});
 
-	// Clear global search preview when switching conversations
-	$effect(() => {
-		void activeConversation()?.id;
-		searchProvidersStore.clearResults();
-	});
-
 	onMount(() => {
 		const pendingDraft = chatStore.consumePendingDraft();
+
 		if (pendingDraft) {
 			initialMessage = pendingDraft.message;
 			fileUpload.uploadedFiles = pendingDraft.files;
@@ -272,6 +287,7 @@
 	onscroll={(e) => {
 		scroll.handleScroll(e);
 		handleMobileScroll();
+
 		if (e.isTrusted && Date.now() > mobileScrollDownHintLockedUntil) {
 			mobileScrollDownHint = false;
 		}
@@ -292,7 +308,7 @@
 	>
 		{#if !isEmpty}
 			<ChatMessages
-				messages={activeMessages()}
+				messages={conversationsStore.activeMessages}
 				onMessagesReady={handleMessagesReady}
 				onUserAction={() => {
 					handleSendLikeScroll();
@@ -326,8 +342,8 @@
 						onclick={() => {
 							mobileScrollDownHint = false;
 							scroll.chatScrollContainer?.scrollTo({
-								top: scroll.chatScrollContainer.scrollHeight,
-								behavior: 'smooth'
+								behavior: 'smooth',
+								top: scroll.chatScrollContainer.scrollHeight
 							});
 						}}
 					/>
@@ -338,7 +354,7 @@
 
 			<ChatScreenForm
 				class="pointer-events-auto conversation-chat-form"
-				disabled={hasPropsError || isEditing()}
+				disabled={hasPropsError || chatStore.isEditing()}
 				{initialMessage}
 				isLoading={isCurrentConversationLoading}
 				onFileRemove={fileUpload.handleFileRemove}
@@ -348,31 +364,6 @@
 				onSystemPromptAdd={handleSystemPromptAdd}
 				bind:uploadedFiles={fileUpload.uploadedFiles}
 			/>
-
-			<div class="pointer-events-auto mt-2 hidden justify-end 2xl:flex">
-				<Button
-					variant="ghost"
-					size="sm"
-					class="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
-					onclick={() => {
-						const nextStyle = chatWidthStyle === 'normal' ? 'wide' : chatWidthStyle === 'wide' ? 'full' : 'normal';
-						settingsStore.updateConfig(SETTINGS_KEYS.CHAT_WIDTH_STYLE, nextStyle);
-					}}
-					aria-label={chatWidthStyle === 'normal' ? 'Expand chat to wide' : chatWidthStyle === 'wide' ? 'Expand chat to full' : 'Collapse chat'}
-					title={chatWidthStyle === 'normal' ? 'Expand chat to wide' : chatWidthStyle === 'wide' ? 'Expand chat to full' : 'Collapse chat'}
-				>
-					{#if chatWidthStyle === 'normal'}
-						<Maximize2 class="h-3.5 w-3.5" />
-						Wide chat
-					{:else if chatWidthStyle === 'wide'}
-						<Expand class="h-3.5 w-3.5" />
-						Full chat
-					{:else}
-						<Minimize2 class="h-3.5 w-3.5" />
-						Narrow chat
-					{/if}
-				</Button>
-			</div>
 		</div>
 	</div>
 {/if}

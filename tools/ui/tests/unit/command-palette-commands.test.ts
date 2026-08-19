@@ -3,7 +3,7 @@ import {
 	buildCommandPaletteItems,
 	filterCommandPaletteItems,
 	groupCommandPaletteItems
-} from '$lib/utils/command-palette-commands';
+} from '$lib/fork/command-palette/command-palette-commands';
 
 const routes = {
 	start: '#/',

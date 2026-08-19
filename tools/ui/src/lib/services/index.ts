@@ -102,10 +102,6 @@ export { ChatService } from './chat.service';
  * @see chatStore in stores/chat.svelte.ts — uses DatabaseService directly for message CRUD during streaming
  */
 export { DatabaseService } from './database.service';
-export { FolderService } from './folder.service';
-export { SkillService } from './skill.service';
-export { PresetService } from './preset.service';
-export { SearchProviderService } from './search-provider.service';
 
 /**
  * **ModelsService** - Model management API communication
@@ -280,7 +276,7 @@ export { MCPService } from './mcp.service';
  * - **toolsStore**: Exposes the tool definition when the sandbox is enabled
  * - **agenticStore**: Dispatches ToolSource.FRONTEND calls here
  *
- * @see buildSandboxToolDefinition in constants/sandbox.ts - tool schema sent to the LLM
+ * @see buildSandboxToolDefinition in utils/sandbox-tool - tool schema sent to the LLM
  * @see agenticStore in stores/agentic.svelte.ts - tool dispatch
  */
 export { SandboxService } from './sandbox.service';

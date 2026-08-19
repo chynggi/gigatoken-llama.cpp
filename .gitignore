@@ -150,6 +150,7 @@ flake.lock
 a.out.*
 
 # AGENTS
+.commandcode/
 
 AGENTS.local.md
 .pi/SYSTEM.md

@@ -116,7 +116,10 @@ function(llama_build_and_test source)
     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
 endfunction()
 
-llama_build_and_test(test-unicode.cpp)
+if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+    # unicode_regex_split is internal to libllama and is not exported from the DLL
+    llama_build_and_test(test-unicode.cpp)
+endif()
 
 # build test-tokenizer-0 target once and add many tests
 llama_build(test-tokenizer-0.cpp)

@@ -3,7 +3,7 @@
 # ------------------------------------------------------------
 # Stage 1: Build gigatoken-llama.cpp for RTX 5090 / Blackwell
 # ------------------------------------------------------------
-FROM nvidia/cuda:12.9.1-devel-ubuntu24.04 AS builder
+FROM nvidia/cuda:12.9.2-devel-ubuntu24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -24,6 +24,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# froggeric/Qwen-Fixed-Chat-Templates (v22.1, Apache-2.0): drop-in Jinja
+# chat template for Qwen 3.5/3.6/3.8 that fixes rendering errors, KV cache
+# invalidation and agentic stalling of the official Qwen templates.
+# Only consumed by the runtime-qwen target; the stock runtime stays clean.
+RUN curl -fsSL \
+    https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates/resolve/main/chat_template.jinja \
+    -o /opt/qwen-chat-template.jinja
+
+# Google Gemma 4 canonical chat template (2026-07-09, Gemma license):
+# fixes tool-calling loops, turn closures and thinking content-ordering.
+# GGUF conversions often carry an older template, so ship the latest one.
+# Only consumed by the runtime-gemma target.
+RUN curl -fsSL \
+    https://huggingface.co/google/gemma-4-31B-it/resolve/main/chat_template.jinja \
+    -o /opt/gemma-chat-template.jinja
 
 WORKDIR /src
 
@@ -63,15 +79,16 @@ RUN --mount=type=cache,target=/root/.ccache \
 # Stage 1.5: CUDA runtime libraries
 # Provides libcuda.so.1 and CUDA runtime for linking
 # ------------------------------------------------------------
-FROM nvidia/cuda:12.9.1-runtime-ubuntu24.04 AS runtime-libs
+FROM nvidia/cuda:12.9.2-runtime-ubuntu24.04 AS runtime-libs
 
 # No additional setup needed; this stage just exports the runtime libs
 
 # ------------------------------------------------------------
-# Stage 2: Final runtime image
-# Combine Vast.ai runtime with compiled binaries + CUDA libs
+# Stage 2: Shared runtime image
+# Vast.ai runtime + compiled binaries + CUDA libs.
+# Both final images below derive from this.
 # ------------------------------------------------------------
-FROM vastai/llama-cpp:b10182-cuda-12.9 AS runtime
+FROM vastai/llama-cpp:b10435-cuda-12.9 AS runtime-base
 
 USER root
 
@@ -90,8 +107,37 @@ COPY --from=builder /src/build/bin/ /opt/llama.cpp/cuda-12.8/
 # Useful metadata so it is obvious this is not stock Vast llama.cpp.
 ENV LLAMA_CPP_RELEASE=gigatoken
 ENV LLAMA_CPP_DIR=/opt/llama.cpp/cuda-12.8
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
 
 # Do NOT override ENTRYPOINT.
 # Inherited:
 # ENTRYPOINT ["/opt/instance-tools/bin/entrypoint.sh"]
+
+# ------------------------------------------------------------
+# Stage 3a: Runtime with the fixed Qwen chat template
+# froggeric/Qwen-Fixed-Chat-Templates (v22.1, Apache-2.0).
+# Build with: docker build --target runtime-qwen -t <tag> .
+# llama-server picks it up via LLAMA_ARG_CHAT_TEMPLATE_FILE;
+# pass --reasoning-format deepseek to extract <think> blocks into
+# the reasoning_content API field.
+# ------------------------------------------------------------
+FROM runtime-base AS runtime-qwen
+
+COPY --from=builder /opt/qwen-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
+ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
+
+# ------------------------------------------------------------
+# Stage 3b: Runtime with the canonical Gemma 4 chat template
+# Google gemma-4-31B-it (2026-07-09).
+# Build with: docker build --target runtime-gemma -t <tag> .
+# ------------------------------------------------------------
+FROM runtime-base AS runtime-gemma
+
+COPY --from=builder /opt/gemma-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
+ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
+
+# ------------------------------------------------------------
+# Stage 3c: Stock runtime (no chat template override)
+# Default build target; keep this the last stage.
+# ------------------------------------------------------------
+FROM runtime-base AS runtime

@@ -4,11 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Build target (runtime, runtime-qwen, runtime-gemma)"
+        description: "Build target (runtime, runtime-qwen, runtime-qwen-sharp, runtime-gemma)"
         type: choice
         options:
           - runtime
           - runtime-qwen
+          - runtime-qwen-sharp
           - runtime-gemma
         default: runtime
       push:

@@ -33,6 +33,13 @@ RUN curl -fsSL \
     https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates/resolve/main/chat_template.jinja \
     -o /opt/qwen-chat-template.jinja
 
+# peculiar-ragdoll/Qwen-Sharp-Chat-Templates (rebased on froggeric): another
+# take on the Qwen chat template fix, rebased on top of froggeric's above.
+# Only consumed by the runtime-qwen-sharp target.
+RUN curl -fsSL \
+    https://huggingface.co/peculiar-ragdoll/Qwen-Sharp-Chat-Templates/resolve/main/chat_template.jinja \
+    -o /opt/qwen-sharp-chat-template.jinja
+
 # Google Gemma 4 canonical chat template (2026-07-09, Gemma license):
 # fixes tool-calling loops, turn closures and thinking content-ordering.
 # GGUF conversions often carry an older template, so ship the latest one.
@@ -124,6 +131,19 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
 FROM runtime-base AS runtime-qwen
 
 COPY --from=builder /opt/qwen-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
+ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
+
+# ------------------------------------------------------------
+# Stage 3a2: Runtime with the Qwen-Sharp chat template
+# peculiar-ragdoll/Qwen-Sharp-Chat-Templates, rebased on froggeric.
+# Build with: docker build --target runtime-qwen-sharp -t <tag> .
+# llama-server picks it up via LLAMA_ARG_CHAT_TEMPLATE_FILE;
+# pass --reasoning-format deepseek to extract <think> blocks into
+# the reasoning_content API field.
+# ------------------------------------------------------------
+FROM runtime-base AS runtime-qwen-sharp
+
+COPY --from=builder /opt/qwen-sharp-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
 ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
 
 # ------------------------------------------------------------

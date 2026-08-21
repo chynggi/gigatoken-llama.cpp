@@ -539,6 +539,36 @@ llama_context::~llama_context() {
     ggml_opt_free(opt_ctx);
 }
 
+// a layer that needs fa_kv_f16 casts its KV cache to F16 before the flash attention op. the CPU
+// dup implements quantized -> F32 only, so if the layer device cannot do the quantized -> F16
+// copy either, the cast lands on the CPU and aborts inside ggml with no usable message.
+static bool llama_dev_supports_cast_f16(ggml_backend_dev_t dev, const ggml_tensor * src) {
+    if (!src || !ggml_is_quantized(src->type)) {
+        return true;
+    }
+
+    ggml_init_params ip = {
+        /*.mem_size   =*/ ggml_tensor_overhead()*4,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+
+    ggml_context * ctx = ggml_init(ip);
+    if (!ctx) {
+        return true;
+    }
+
+    ggml_tensor * a  = ggml_new_tensor_2d(ctx, src->type,     src->ne[0], 1);
+    ggml_tensor * b  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, src->ne[0], 1);
+    ggml_tensor * op = ggml_cpy(ctx, a, b);
+
+    const bool res = dev && ggml_backend_dev_supports_op(dev, op);
+
+    ggml_free(ctx);
+
+    return res;
+}
+
 void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs) {
     const char * func = __func__;
     auto resolve = [&](const llm_fused_op_probe & probe, bool & enabled) {
@@ -640,6 +670,19 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
 
             if (device_fused != device_layer) {
                 fa_kv_f16[node.il] = true;
+
+                const ggml_tensor * k = node.tensor->src[1];
+                const ggml_tensor * v = node.tensor->src[2];
+
+                if (!llama_dev_supports_cast_f16(device_layer, k) ||
+                    !llama_dev_supports_cast_f16(device_layer, v)) {
+                    throw std::runtime_error(format(
+                            "the flash attention kernels of %s do not support the KV cache types "
+                            "K=%s V=%s, and converting them to F16 is not implemented either. "
+                            "use the same type for -ctk and -ctv, or set both to f16",
+                            device_layer ? ggml_backend_dev_name(device_layer) : "the layer device",
+                            ggml_type_name(k->type), ggml_type_name(v->type)));
+                }
             }
         }
     }

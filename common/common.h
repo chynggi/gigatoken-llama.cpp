@@ -347,6 +347,7 @@ struct common_params_speculative_draft {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+    int32_t n_cpu_moe = 0; // see common_params::n_cpu_moe
 };
 
 struct common_params_speculative_ngram_mod {
@@ -516,6 +517,11 @@ struct common_params {
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+
+    // -ncmoe/-ncffn: keep the FFN weights of N layers in the CPU. which N layers is decided
+    // at model load time, largest-FFN-first - see common/ffn-offload.h
+    int32_t n_cpu_moe = 0;
+    int32_t n_cpu_ffn = 0;
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_adapter_lora_apply)
     std::vector<common_adapter_lora_info> lora_adapters; // lora adapter path with user defined scale
@@ -1130,14 +1136,11 @@ inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
     return { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() };
 }
 
-inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vector<llama_model_tensor_buft_override> & overrides) {
-    // keep strings alive and avoid leaking memory by storing them in a static list
-    static std::list<std::string> buft_override_strings;
-    for (int i = 0; i < n; ++i) {
-        buft_override_strings.push_back(string_format("blk\\.%d%s", i, ffn_regex));
-        overrides.push_back({buft_override_strings.back().c_str(), ggml_backend_cpu_buffer_type()});
-    }
-}
+// resolve -ncmoe/-ncffn into tensor buffer overrides once the model path is known.
+// picks the layers with the largest FFN weights instead of layers 0..N-1, warns when the
+// requested flag does not match the model type, and falls back to index order when the
+// per-layer sizes cannot be read. idempotent: calling it twice adds the overrides once.
+void common_ffn_offload_resolve(common_params & params);
 
 //
 // training utils

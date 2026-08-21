@@ -75,6 +75,8 @@ add_library(${TARGET}
     download.h
     fit.cpp
     fit.h
+    ffn-offload.cpp
+    ffn-offload.h
     hf-cache.cpp
     hf-cache.h
     http.h

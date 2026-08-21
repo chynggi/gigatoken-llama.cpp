@@ -4,6 +4,7 @@
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
+#include "ffn-offload.h"
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
@@ -22,6 +23,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <numeric>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -1313,6 +1315,9 @@ struct common_init_result::impl {
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    // needs params.model.path, which is only final here (llama-server resolves it after arg parsing)
+    common_ffn_offload_resolve(params);
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1694,6 +1699,129 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
     }
 
     llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());
+}
+
+// append CPU overrides for the given block indices, using the free slots that
+// common_params_parse_ex reserved when they exist and growing the vector otherwise.
+// the terminating {nullptr, nullptr} entry is always kept at the back.
+static void common_ffn_offload_apply(std::vector<llama_model_tensor_buft_override> & overrides,
+        const std::vector<int> & layers, const char * ffn_regex) {
+    if (layers.empty()) {
+        return;
+    }
+
+    // keep strings alive and avoid leaking memory by storing them in a static list
+    static std::list<std::string> buft_override_strings;
+
+    ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
+
+    size_t slot = 0;
+    for (int il : layers) {
+        buft_override_strings.push_back(string_format("blk\\.%d%s", il, ffn_regex));
+        const char * pattern = buft_override_strings.back().c_str();
+
+        while (slot < overrides.size() && overrides[slot].pattern != nullptr) {
+            slot++;
+        }
+
+        if (slot + 1 < overrides.size()) {
+            // leave at least one free slot so the vector stays terminated
+            overrides[slot] = { pattern, cpu_buft };
+            slot++;
+        } else {
+            if (!overrides.empty() && overrides.back().pattern == nullptr) {
+                overrides.back() = { pattern, cpu_buft };
+            } else {
+                overrides.push_back({ pattern, cpu_buft });
+            }
+            overrides.push_back({ nullptr, nullptr });
+            slot = overrides.size();
+        }
+    }
+
+    if (overrides.empty() || overrides.back().pattern != nullptr) {
+        overrides.push_back({ nullptr, nullptr });
+    }
+}
+
+// layers 0..n-1, the selection used when the per-layer sizes are unavailable
+static std::vector<int> common_ffn_index_order(int n) {
+    std::vector<int> layers(n);
+    std::iota(layers.begin(), layers.end(), 0);
+    return layers;
+}
+
+// resolve one -ncmoe/-ncffn request against the per-layer sizes of one model
+static void common_ffn_offload_resolve_one(std::vector<llama_model_tensor_buft_override> & overrides,
+        const std::string & path_model, int n, bool want_moe, const char * flag) {
+    if (n <= 0) {
+        return;
+    }
+
+    const char * ffn_regex = want_moe ? LLM_FFN_EXPS_REGEX : LLM_FFN_DENSE_REGEX;
+
+    common_ffn_layer_sizes sizes;
+    if (!common_ffn_scan_gguf(path_model, sizes)) {
+        LOG_DBG("%s: could not read per-layer FFN sizes from %s, %s falls back to layers 0..%d\n",
+                __func__, path_model.c_str(), flag, n - 1);
+        common_ffn_offload_apply(overrides, common_ffn_index_order(n), ffn_regex);
+        return;
+    }
+
+    if (want_moe && !sizes.is_moe) {
+        LOG_WRN("%s: %s was requested but this model has no experts - "
+                "for a dense model use --n-cpu-ffn instead\n", __func__, flag);
+    } else if (!want_moe && sizes.is_moe) {
+        LOG_WRN("%s: %s only moves the dense FFN weights, but this model is a Mixture of Experts - "
+                "to offload the expert weights use --n-cpu-moe instead\n", __func__, flag);
+    }
+
+    if (sizes.sharded) {
+        LOG_DBG("%s: %s is a split model, per-layer FFN sizes are incomplete - "
+                "%s falls back to layers 0..%d\n", __func__, path_model.c_str(), flag, n - 1);
+        common_ffn_offload_apply(overrides, common_ffn_index_order(n), ffn_regex);
+        return;
+    }
+
+    const std::vector<size_t> & per_layer = want_moe ? sizes.moe : sizes.dense;
+
+    const std::vector<int> layers = common_ffn_pick_layers(per_layer, n);
+    if (layers.empty()) {
+        LOG_WRN("%s: %s had no matching FFN weights to move to the CPU\n", __func__, flag);
+        return;
+    }
+
+    size_t total = 0;
+    for (int il : layers) {
+        total += per_layer[il];
+    }
+
+    if ((int) layers.size() < n) {
+        LOG_WRN("%s: %s requested %d layers but only %d have matching FFN weights\n",
+                __func__, flag, n, (int) layers.size());
+    }
+
+    LOG_INF("%s: %s keeping %d layer(s) in the CPU (%.2f MiB), largest FFN first\n",
+            __func__, flag, (int) layers.size(), total / (1024.0 * 1024.0));
+    for (int il : layers) {
+        LOG_DBG("%s:   blk.%d -> CPU (%.2f MiB)\n", __func__, il, per_layer[il] / (1024.0 * 1024.0));
+    }
+
+    common_ffn_offload_apply(overrides, layers, ffn_regex);
+}
+
+void common_ffn_offload_resolve(common_params & params) {
+    common_ffn_offload_resolve_one(params.tensor_buft_overrides,
+            params.model.path, params.n_cpu_moe, true, "--n-cpu-moe");
+    common_ffn_offload_resolve_one(params.tensor_buft_overrides,
+            params.model.path, params.n_cpu_ffn, false, "--n-cpu-ffn");
+    common_ffn_offload_resolve_one(params.speculative.draft.tensor_buft_overrides,
+            params.speculative.draft.mparams.path, params.speculative.draft.n_cpu_moe, true, "--n-cpu-moe-draft");
+
+    // idempotent: a second call must not add the same overrides again
+    params.n_cpu_moe = 0;
+    params.n_cpu_ffn = 0;
+    params.speculative.draft.n_cpu_moe = 0;
 }
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {

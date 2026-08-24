@@ -10,7 +10,7 @@
  * text out of an open `/chat/[id]` compose box.
  */
 
-import { draftMessagesStore } from '$lib/stores/draft-messages.svelte';
+import { draftMessagesStore } from '$lib/stores';
 
 /**
  * Queue compose text for the new-chat form.

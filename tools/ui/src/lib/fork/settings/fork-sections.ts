@@ -1,7 +1,7 @@
 /**
  * Settings registry entries owned by the fork.
  *
- * Upstream's `settings-registry.constants.ts` spreads these in, which keeps the
+ * Upstream's `settings.constants.ts` spreads these in, which keeps the
  * fork's footprint there to three lines. `SETTING_CONFIG_DEFAULT` and
  * `SETTINGS_CHAT_SECTIONS` are both derived from the registry, so defaults and
  * the settings UI pick these up with no further wiring.
@@ -9,7 +9,7 @@
  * The key strings themselves live in `keys.ts`.
  */
 
-import { SETTINGS_SECTION_SLUGS } from '$lib/constants/routes.constants';
+import { SETTINGS_SECTION_SLUGS } from '$lib/constants/settings.constants';
 import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
 import { SettingsFieldType } from '$lib/enums/settings.enums';
 import type { SettingsEntry, SettingsSectionEntry, SettingsSectionTitle } from '$lib/types';
@@ -69,7 +69,6 @@ export const FORK_DISPLAY_SETTINGS: SettingsEntry[] = [
 		help: 'Choose a custom accent color used for focus glows, message bubbles, and AI activity highlights.',
 		defaultValue: 'default',
 		type: SettingsFieldType.SELECT,
-		section: SETTINGS_SECTION_SLUGS.DISPLAY,
 		options: ACCENT_COLOR_OPTIONS
 	},
 	{
@@ -78,7 +77,6 @@ export const FORK_DISPLAY_SETTINGS: SettingsEntry[] = [
 		help: 'Choose a specific theme style variation to customize color schemes and syntax highlighting.',
 		defaultValue: 'default',
 		type: SettingsFieldType.SELECT,
-		section: SETTINGS_SECTION_SLUGS.DISPLAY,
 		options: THEME_STYLE_OPTIONS
 	},
 	{
@@ -87,7 +85,6 @@ export const FORK_DISPLAY_SETTINGS: SettingsEntry[] = [
 		help: 'Choose how wide the chat message list should expand. Full Width fills the entire window space except the sidebar.',
 		defaultValue: 'normal',
 		type: SettingsFieldType.SELECT,
-		section: SETTINGS_SECTION_SLUGS.DISPLAY,
 		options: CHAT_WIDTH_STYLE_OPTIONS
 	}
 ];
@@ -110,7 +107,6 @@ export const FORK_SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Enable reusable prompt templates with slash commands (/summarize, /translate, etc.). Manage skills at #/skills.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: FORK_PACKS_SLUG,
 				isExperimental: true
 			},
 			{
@@ -119,7 +115,6 @@ export const FORK_SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Inject web search results into chat context on send. Configure providers at #/search-providers. When auto-detect is off, every message is searched; when on, only messages ending with ?.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: FORK_PACKS_SLUG,
 				isExperimental: true
 			},
 			{
@@ -128,7 +123,6 @@ export const FORK_SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'When enabled, only search for messages that end with a question mark. When disabled, search every message while web search is on.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: FORK_PACKS_SLUG,
 				isExperimental: true
 			},
 			{
@@ -137,7 +131,6 @@ export const FORK_SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Number of search results to inject into chat context (1-10).',
 				defaultValue: 5,
 				type: SettingsFieldType.INPUT,
-				section: FORK_PACKS_SLUG,
 				isPositiveInteger: true,
 				isExperimental: true
 			},
@@ -147,7 +140,6 @@ export const FORK_SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'ID of the default search provider. Leave empty to use the first enabled provider. Manage providers at #/search-providers.',
 				defaultValue: '',
 				type: SettingsFieldType.INPUT,
-				section: FORK_PACKS_SLUG,
 				isExperimental: true
 			},
 			{
@@ -156,7 +148,6 @@ export const FORK_SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Enable saved presets (system message + sampling + MCP + web search). Apply from the chat form, command palette, or #/presets.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: FORK_PACKS_SLUG,
 				isExperimental: true
 			},
 			{
@@ -165,7 +156,6 @@ export const FORK_SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Enable Cmd/Ctrl+K command palette for quick actions: search conversations, run skills, apply presets, and more.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: FORK_PACKS_SLUG,
 				isExperimental: true
 			}
 		]

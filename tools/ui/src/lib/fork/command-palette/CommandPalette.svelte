@@ -2,11 +2,10 @@
 	import { goto } from '$app/navigation';
 	import { Search, Zap, Sliders, Globe, MessageSquare } from '@lucide/svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { conversationsStore, settingsStore } from '$lib/stores';
 	import { FORK_ROUTES } from '$lib/fork/routes';
 	import { skillsStore } from '$lib/fork/packs/skills.svelte';
 	import { presetsStore } from '$lib/fork/packs/presets.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import { ROUTES } from '$lib/constants';
 	import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';

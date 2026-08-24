@@ -11,7 +11,7 @@ import type { DatabasePreset } from '$lib/fork/db/types';
 import { buildPresetConfigUpdates } from '$lib/fork/packs/preset-apply';
 import { PresetService } from '$lib/fork/packs/preset.service';
 import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores';
 
 class PresetsStore {
 	presets = $state<DatabasePreset[]>([]);

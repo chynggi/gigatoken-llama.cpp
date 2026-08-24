@@ -15,7 +15,7 @@ import {
 } from '$lib/fork/packs/skill-engine';
 import { SkillService } from '$lib/fork/packs/skill.service';
 import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores';
 
 class SkillsStore {
 	skills = $state<DatabaseSkill[]>([]);

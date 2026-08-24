@@ -1,5 +1,5 @@
 import { isNewChatComposeTarget, setPendingComposeText } from '$lib/fork/command-palette/compose-draft';
-import { draftMessagesStore } from '$lib/stores/draft-messages.svelte';
+import { draftMessagesStore } from '$lib/stores';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 /**

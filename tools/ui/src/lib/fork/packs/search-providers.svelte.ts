@@ -12,7 +12,7 @@ import { SearchProviderService } from '$lib/fork/packs/search-provider.service';
 import type { SearchProviderConfig, SearchResult } from '$lib/fork/search/search';
 import { formatSearchResultsForContext, getSearchProvider } from '$lib/fork/search/search';
 import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores';
 
 class SearchProvidersStore {
 	providers = $state<DatabaseSearchProvider[]>([]);

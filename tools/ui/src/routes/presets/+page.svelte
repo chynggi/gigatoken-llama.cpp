@@ -4,7 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import type { DatabasePreset } from '$lib/fork/db/types';
 	import { presetsStore } from '$lib/fork/packs/presets.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 	import { ROUTES, SETTINGS_KEYS } from '$lib/constants';
 	import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
 	import {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
 	import { ACCENT_COLORS } from '$lib/fork/theme/accent-colors';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 
 	const WIDE_CHAT_CLASS = 'wide-chat-mode';
 	const FULL_CHAT_CLASS = 'full-chat-mode';

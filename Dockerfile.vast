@@ -48,6 +48,20 @@ RUN curl -fsSL \
     https://huggingface.co/google/gemma-4-31B-it/resolve/main/chat_template.jinja \
     -o /opt/gemma-chat-template.jinja
 
+# bartowski/nbeerbower_Gemma4-Gutenberg-31B-GGUF (Q4_K_M): baked into the
+# runtime-gemma-gutenberg target so the Vast.ai instance doesn't have to
+# download the model at container start.
+RUN curl -fsSL \
+    https://huggingface.co/bartowski/nbeerbower_Gemma4-Gutenberg-31B-GGUF/resolve/main/nbeerbower_Gemma4-Gutenberg-31B-Q4_K_M.gguf \
+    -o /opt/gemma-gutenberg-31b-q4_k_m.gguf
+
+# ReadyArt/Serenity-27B-GGUF (Q4_K_M): baked into the runtime-qwen-serenity
+# target so the Vast.ai instance doesn't have to download the model at
+# container start.
+RUN curl -fsSL \
+    https://huggingface.co/ReadyArt/Serenity-27B-GGUF/resolve/main/Serenity-27B-Q4_K_M.gguf \
+    -o /opt/serenity-27b-q4_k_m.gguf
+
 WORKDIR /src
 
 COPY . .
@@ -147,6 +161,16 @@ COPY --from=builder /opt/qwen-sharp-chat-template.jinja /opt/llama.cpp/cuda-12.8
 ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
 
 # ------------------------------------------------------------
+# Stage 3a3: runtime-qwen with the ReadyArt/Serenity-27B model (Q4_K_M)
+# baked in, so no model download is needed on instance start.
+# Build with: docker build --target runtime-qwen-serenity -t <tag> .
+# ------------------------------------------------------------
+FROM runtime-qwen AS runtime-qwen-serenity
+
+COPY --from=builder /opt/serenity-27b-q4_k_m.gguf /opt/llama.cpp/cuda-12.8/models/serenity-27b-q4_k_m.gguf
+ENV LLAMA_ARG_MODEL=/opt/llama.cpp/cuda-12.8/models/serenity-27b-q4_k_m.gguf
+
+# ------------------------------------------------------------
 # Stage 3b: Runtime with the canonical Gemma 4 chat template
 # Google gemma-4-31B-it (2026-07-09).
 # Build with: docker build --target runtime-gemma -t <tag> .
@@ -155,6 +179,16 @@ FROM runtime-base AS runtime-gemma
 
 COPY --from=builder /opt/gemma-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
 ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
+
+# ------------------------------------------------------------
+# Stage 3b2: runtime-gemma with the bartowski/nbeerbower_Gemma4-Gutenberg-31B
+# model (Q4_K_M) baked in, so no model download is needed on instance start.
+# Build with: docker build --target runtime-gemma-gutenberg -t <tag> .
+# ------------------------------------------------------------
+FROM runtime-gemma AS runtime-gemma-gutenberg
+
+COPY --from=builder /opt/gemma-gutenberg-31b-q4_k_m.gguf /opt/llama.cpp/cuda-12.8/models/gemma-gutenberg-31b-q4_k_m.gguf
+ENV LLAMA_ARG_MODEL=/opt/llama.cpp/cuda-12.8/models/gemma-gutenberg-31b-q4_k_m.gguf
 
 # ------------------------------------------------------------
 # Stage 3c: Stock runtime (no chat template override)

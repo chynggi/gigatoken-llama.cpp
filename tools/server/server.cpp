@@ -63,6 +63,33 @@ void llama_server_set_load_progress_callback(llama_server_load_progress_callback
     g_load_progress_callback = std::move(callback);
 }
 
+// model loading progress for a standalone server, emitted at 10% steps
+// note: a named function rather than a lambda, so that SRV_INF's __func__ is useful
+static void log_progress(server_state state, json payload) {
+    if (state != SERVER_STATE_LOADING || !payload.contains("value")) {
+        // e.g. the mmproj stage marker carries no progress value
+        return;
+    }
+
+    static std::string last_stage;
+    static int last_step = -1;
+
+    const std::string stage = json_value(payload, "current", std::string("model"));
+    const int pct  = (int) (json_value(payload, "value", 0.0f) * 100.0f + 0.5f);
+    const int step = pct / 10;
+
+    if (stage != last_stage) {
+        last_stage = stage;
+        last_step  = -1;
+    }
+    if (step == last_step) {
+        return;
+    }
+    last_step = step;
+
+    SRV_INF("loading %s: %d%%\n", stage.c_str(), pct);
+}
+
 
 // wrapper function that handles exceptions and logs errors
 // this is to make sure handler_t never throws exceptions; instead, it returns an error response
@@ -492,6 +519,11 @@ int llama_server(common_params & params, int argc, char ** argv) {
                     json_value(payload, "current", std::string{}),
                     json_value(payload, "value",   0.0f));
             });
+        } else if (!is_run_by_cli) {
+            // standalone server: there is no console to draw a bar on, and logs
+            // are routinely redirected to a file, so report progress as plain
+            // log lines at 10% steps instead
+            ctx_server.set_state_callback(log_progress);
         }
 
         if (!ctx_server.load_model(params)) {

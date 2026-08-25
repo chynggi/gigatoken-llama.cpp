@@ -72,6 +72,7 @@ namespace console {
     static display_type current_display  = DISPLAY_TYPE_RESET;
 
     static FILE*        out              = stdout;
+    static bool         is_tty           = false;
 
 #if defined (_WIN32)
     static void*        hConsole;
@@ -89,7 +90,11 @@ namespace console {
     void init(bool use_simple_io, bool use_advanced_display) {
         advanced_display = use_advanced_display;
         simple_io = use_simple_io;
+        // note: this cannot be derived from advanced_display - that one comes from
+        // params.use_color, which is false both for --no-color and for a pipe
 #if defined(_WIN32)
+        is_tty = _isatty(_fileno(out)) != 0;
+
         // Windows-specific console initialization
         DWORD dwMode = 0;
         hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -128,6 +133,8 @@ namespace console {
             _setmode(_fileno(stdin), _O_U8TEXT);
         }
 #else
+        is_tty = isatty(fileno(out)) != 0;
+
         // POSIX-specific console initialization
         if (!simple_io) {
             struct termios new_termios;
@@ -1169,6 +1176,73 @@ namespace console {
             }
         }
         return bar;
+    }
+
+    namespace progress {
+        static const int BAR_WIDTH = 24;
+
+        static std::string label;
+        static bool active    = false; // a bar line is currently open
+        static bool started   = false; // logs have been flushed for this run
+        static int  last_step = -1;    // line mode: last emitted 10% step
+
+        void update(const std::string & new_label, float value) {
+            if (!(value >= 0.0f)) { // also catches NaN
+                value = 0.0f;
+            }
+            if (value > 1.0f) {
+                value = 1.0f;
+            }
+
+            // draw in place only on a real terminal; a pipe or --simple-io gets
+            // plain lines so that redirected output stays readable
+            const bool in_place = !simple_io && is_tty;
+
+            if (!started) {
+                // make sure buffered log output does not land in the middle of the bar
+                common_log_flush(common_log_main());
+                started = true;
+            }
+
+            if (new_label != label) {
+                if (active) {
+                    fprintf(out, "\n");
+                    active = false;
+                }
+                label     = new_label;
+                last_step = -1;
+                if (in_place) {
+                    fprintf(out, "%s\n", label.c_str());
+                }
+            }
+
+            const int pct = (int) (value * 100.0f + 0.5f);
+
+            if (in_place) {
+                // the line has a constant width, so \r alone is enough - no padding needed
+                fprintf(out, "\r[%s] %3d%%",
+                        progress_bar_str(value, BAR_WIDTH, advanced_display).c_str(), pct);
+                active = true;
+            } else {
+                const int step = pct / 10;
+                if (step != last_step) {
+                    last_step = step;
+                    fprintf(out, "%s: %d%%\n", label.c_str(), pct);
+                }
+            }
+            fflush(out);
+        }
+
+        void stop() {
+            if (active) {
+                fprintf(out, "\n");
+                fflush(out);
+                active = false;
+            }
+            label.clear();
+            started   = false;
+            last_step = -1;
+        }
     }
 
     void log(const char * fmt, ...) {

@@ -36,6 +36,19 @@ namespace console {
     // pure function - safe to call before console::init()
     std::string progress_bar_str(float value, int width, bool unicode);
 
+    // progress bar for long-running startup work (model loading)
+    //
+    // not thread-safe: all calls must come from the same thread, and the
+    // spinner must be stopped first - both draw on the same line
+    namespace progress {
+        // `label` is printed on its own line whenever it changes; the bar line
+        // below it is then updated in place. `value` is clamped to [0,1].
+        void update(const std::string & label, float value);
+
+        // closes the open bar line with a newline; no-op if nothing was drawn
+        void stop();
+    }
+
     // note: the logging API below output directly to stdout
     // it can negatively impact performance if used on inference thread
     // only use in in a dedicated CLI thread

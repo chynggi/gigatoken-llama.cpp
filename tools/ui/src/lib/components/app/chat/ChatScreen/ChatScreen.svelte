@@ -295,8 +295,8 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-1rem-var(--chat-tabs-offset,0px))] px-4 md:py-0 pt-12 pb-48 md:pb-4"
 		style:--chat-form-bottom-position={chatFormBottomPosition}
+		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-1rem-var(--chat-tabs-offset,0px))] px-4 md:py-0 pt-12 pb-48 md:pb-4"
 		ondragenter={dragAndDrop.dragHandlers.dragenter}
 		ondragleave={dragAndDrop.dragHandlers.dragleave}
 		ondragover={dragAndDrop.dragHandlers.dragover}
@@ -314,6 +314,7 @@
 		{/if}
 
 		<div
+			style:padding-top={!isEmpty ? 'var(--chat-form-padding-top)' : undefined}
 			class={[
 				'pointer-events-none md:sticky fixed  mt-auto transition-all duration-200',
 				deviceStore.isStandalone
@@ -323,7 +324,6 @@
 						: 'bottom-2 right-2 left-2',
 				isEmpty ? 'md:bottom-[calc(50dvh-7rem)] 2xl:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4'
 			]}
-			style:padding-top={!isEmpty ? 'var(--chat-form-padding-top)' : undefined}
 		>
 			<ChatScreenGreeting {isEmpty} />
 
@@ -350,6 +350,7 @@
 			<SearchResultsPreview />
 
 			<ChatScreenForm
+				bind:uploadedFiles={fileUpload.uploadedFiles}
 				class="pointer-events-auto conversation-chat-form"
 				disabled={hasPropsError || chatStore.isEditing()}
 				{initialMessage}
@@ -359,18 +360,17 @@
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
 				onSystemPromptAdd={handleSystemPromptAdd}
-				bind:uploadedFiles={fileUpload.uploadedFiles}
 			/>
 		</div>
 	</div>
 {/if}
 
 <ChatScreenDialogsAndAlerts
-	{showDeleteDialog}
-	{handleDeleteConfirm}
-	{showEmptyFileDialog}
-	{emptyFileNames}
 	{activeErrorDialog}
-	{handleErrorDialogOpenChange}
+	{emptyFileNames}
 	{fileUpload}
+	{handleDeleteConfirm}
+	{handleErrorDialogOpenChange}
+	{showDeleteDialog}
+	{showEmptyFileDialog}
 />

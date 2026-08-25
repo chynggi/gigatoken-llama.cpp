@@ -31,6 +31,11 @@ namespace console {
         void stop();
     }
 
+    // renders the filled/empty portion of a progress bar, without brackets or
+    // percentage; `value` is clamped to [0,1], NaN is treated as 0
+    // pure function - safe to call before console::init()
+    std::string progress_bar_str(float value, int width, bool unicode);
+
     // note: the logging API below output directly to stdout
     // it can negatively impact performance if used on inference thread
     // only use in in a dedicated CLI thread

@@ -1143,6 +1143,34 @@ namespace console {
         }
     }
 
+    std::string progress_bar_str(float value, int width, bool unicode) {
+        // note: written as `!(value >= 0.0f)` so that NaN also lands on 0
+        if (!(value >= 0.0f)) {
+            value = 0.0f;
+        }
+        if (value > 1.0f) {
+            value = 1.0f;
+        }
+        if (width < 0) {
+            width = 0;
+        }
+
+        const int filled = (int) (value * (float) width);
+
+        std::string bar;
+        bar.reserve((size_t) width * 3);
+        for (int i = 0; i < width; i++) {
+            const bool is_filled = i < filled;
+            if (unicode) {
+                bar += is_filled ? "\xe2\x96\x88"  // U+2588 FULL BLOCK
+                                 : "\xe2\x96\x91"; // U+2591 LIGHT SHADE
+            } else {
+                bar += is_filled ? '#' : '-';
+            }
+        }
+        return bar;
+    }
+
     void log(const char * fmt, ...) {
         va_list args;
         va_start(args, fmt);

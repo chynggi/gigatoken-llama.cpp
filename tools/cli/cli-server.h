@@ -1,6 +1,10 @@
 #pragma once
 
+#include <functional>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "http.h"
 
@@ -8,11 +12,30 @@
 int llama_server(common_params & params, int argc, char ** argv);
 void llama_server_terminate();
 
+// must match the definition in tools/server/server.cpp
+using llama_server_load_progress_callback =
+    std::function<void(const std::vector<std::string> & stages, const std::string & current, float value)>;
+void llama_server_set_load_progress_callback(llama_server_load_progress_callback callback);
+
 struct cli_server {
+    // model loading progress, written by the server thread and read by the
+    // caller of wait_ready(); the server thread never touches the console
+    struct load_state {
+        std::mutex mtx;
+        bool has_progress = false;
+        std::vector<std::string> stages;
+        std::string current;
+        float value = 0.0f;
+    };
+
+    // called on the caller's thread with a consistent snapshot of load_state
+    using progress_fn = std::function<void(const std::vector<std::string> & stages, const std::string & current, float value)>;
+
     std::thread th;
     int port = -1;
     std::atomic<bool> is_alive = false;
     std::atomic<bool> is_stopping = false;
+    load_state load;
 
     ~cli_server() {
         stop();
@@ -28,6 +51,9 @@ struct cli_server {
         if (th.joinable()) {
             th.join();
         }
+        // clear only after the join, so the server thread can never invoke a
+        // callback holding a dangling `this`
+        llama_server_set_load_progress_callback(nullptr);
     }
 
     // spawn llama-server in a thread and interact with it via a random port
@@ -37,6 +63,17 @@ struct cli_server {
             fprintf(stderr, "failed to get a free port\n");
             exit(1);
         }
+
+        // the server thread only takes a snapshot here - rendering happens on
+        // the caller's thread in wait_ready()
+        llama_server_set_load_progress_callback(
+            [this](const std::vector<std::string> & stages, const std::string & current, float value) {
+                std::lock_guard<std::mutex> lock(load.mtx);
+                load.has_progress = true;
+                load.stages       = stages;
+                load.current      = current;
+                load.value        = value;
+            });
 
         is_alive.store(true, std::memory_order_release);
 
@@ -59,11 +96,30 @@ struct cli_server {
         return "http://127.0.0.1:" + std::to_string(port);
     }
 
-    bool wait_ready(std::function<bool()> should_stop) {
+    bool wait_ready(std::function<bool()> should_stop, const progress_fn & on_progress = nullptr) {
         if (!alive()) {
             return false;
         }
         while (!should_stop()) {
+            if (on_progress) {
+                std::vector<std::string> stages;
+                std::string current;
+                float value = 0.0f;
+                bool has_progress = false;
+                {
+                    std::lock_guard<std::mutex> lock(load.mtx);
+                    has_progress = load.has_progress;
+                    if (has_progress) {
+                        stages  = load.stages;
+                        current = load.current;
+                        value   = load.value;
+                    }
+                }
+                if (has_progress) {
+                    on_progress(stages, current, value);
+                }
+            }
+
             auto [cli, parts] = common_http_client(address());
             cli.set_connection_timeout(1, 0);
             auto res = cli.Get("/health");

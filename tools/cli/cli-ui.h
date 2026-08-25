@@ -149,6 +149,29 @@ namespace ui {
         }
     };
 
+    // builds the header line, e.g. "Loading model (1/2 text_model)"
+    // falls back to a bare label when there is only one stage or the stage is unknown
+    static std::string progress_label(const std::vector<std::string> & stages, const std::string & current) {
+        if (stages.size() <= 1 || current.empty()) {
+            return "Loading model";
+        }
+        auto it = std::find(stages.begin(), stages.end(), current);
+        if (it == stages.end()) {
+            return "Loading model";
+        }
+        return string_format("Loading model (%d/%d %s)",
+                             (int) (it - stages.begin()) + 1, (int) stages.size(), current.c_str());
+    }
+
+    struct progress_bar {
+        ~progress_bar() {
+            console::progress::stop();
+        }
+        void update(const std::string & label, float value) {
+            console::progress::update(label, value);
+        }
+    };
+
     struct user_turn {
         user_turn() {
             console::set_display(DISPLAY_TYPE_USER_INPUT);
@@ -233,6 +256,7 @@ namespace ui {
 
     static void show_error(const std::string & title, const std::string & message = "") {
         console::spinner::stop();
+        console::progress::stop();
         console::error("Error: %s\n", title.c_str());
         if (!message.empty()) {
             console::log("%s\n", message.c_str());

@@ -123,12 +123,29 @@ bool cli_context::init() {
             ui::show_error("server start failed");
             return false;
         }
-        if (!server->wait_ready(should_stop)) {
+        // keep the spinner until the first progress sample arrives - backend
+        // init and metadata parsing report nothing, and a bar frozen at 0%
+        // would read as a hang
+        std::optional<ui::progress_bar> progress;
+        auto on_progress = [&](const std::vector<std::string> & stages, const std::string & current, float value) {
+            if (!progress) {
+                spinner.reset(); // stop the spinner thread before taking over the line
+                // the spinner leaves the cursor right after its message, so start
+                // the progress block on a line of its own
+                console::log("\n");
+                progress.emplace();
+            }
+            progress->update(ui::progress_label(stages, current), value);
+        };
+
+        if (!server->wait_ready(should_stop, on_progress)) {
+            progress.reset();
             if (!should_stop()) {
                 ui::show_error("the server exited before becoming ready");
             }
             return false;
         }
+        progress.reset();
         client.server_base = server->address();
     }
 

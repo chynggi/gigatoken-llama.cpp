@@ -611,6 +611,8 @@ struct llama_model {
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
+    // dflash: per-target-layer RMSNorm applied to each aux hidden state before the fc fusion
+    struct ggml_tensor * output_norm_enc_aux = nullptr;
 
 
     // NVFP4 per-tensor scale2, input_scale for LM head

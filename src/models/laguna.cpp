@@ -169,9 +169,16 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
     llm_graph_input_attn_kv_iswa * inp_attn_iswa = has_swa ? build_attn_inp_kv_iswa() : nullptr;
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    // DFlash/DSpark drafters fuse hidden states extracted from a handful of target
+    // layers. Layer id n_layer means "the input to the layer past the last one", i.e.
+    // the final hidden state before output_norm, so it has to be captured after the loop.
+    const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
+
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         const bool    is_swa_il   = hparams.is_swa(il);
         const int64_t n_head_il   = hparams.n_head(il);
         const int64_t n_head_kv_il = hparams.n_head_kv(il);
@@ -261,7 +268,9 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "attn_o_proj", il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids) {
+        // narrowing to the output rows early saves work in the last block, but the
+        // final-layer extraction needs the full-width hidden state -- defer it there
+        if (il == n_layer - 1 && inp_out_ids && !extract_final_inp) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -321,6 +330,15 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
     }
 
     cur = inpL;
+
+    if (extract_final_inp) {
+        res->t_layer_inp[n_layer] = cur;
+
+        if (inp_out_ids) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        }
+    }
+
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
     res->t_embd = cur;

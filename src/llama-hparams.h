@@ -228,6 +228,10 @@ struct llama_hparams {
     uint32_t dflash_conv_group_size  = 0;
     uint32_t dflash_selector_rank    = 0;
     uint32_t dflash_selector_top_k   = 0;
+    // DFlash drafters reuse a target-family decoder block. Anything other than the
+    // default Qwen3-style block (fused QKV, softplus output gate, per-layer-type RoPE)
+    // is selected by the `decoder_arch` key -- see llama_model_dflash::load_arch_hparams.
+    bool     dflash_decoder_laguna   = false;
 
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;

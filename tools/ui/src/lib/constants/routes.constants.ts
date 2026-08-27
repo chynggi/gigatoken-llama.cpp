@@ -19,10 +19,6 @@ export const ROUTES = {
 	NEW_CHAT: `?${URL_PARAMS.NEW_CHAT}=true#/`,
 	/** Search — mobile-only full-page conversation search. */
 	SEARCH: '#/search',
-	/** Settings base — for dynamic settings URLs use RouterService. */
-	SETTINGS: '#/settings',
-	/** Exit destination for the settings view (fallback when no referrer). */
-	SETTINGS_EXIT: '#/',
 	/** Root — start of the app. */
 	START: '#/'
 } as const;

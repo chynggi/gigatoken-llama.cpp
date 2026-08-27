@@ -928,6 +928,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     llama_token mask_token_id = 0;
 
     bool    is_dflash2     = false;
+    bool    is_mrope       = false;
     int32_t selector_top_k = 0;
     std::vector<std::mt19937> selector_rng;
     std::vector<bool> selector_reset;
@@ -975,11 +976,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             if (llama_model_meta_val_str(model_dft, "dflash.sample_from_anchor", buf, sizeof(buf)) >= 0) {
                 sample_from_anchor = std::strcmp(buf, "true") == 0;
             }
-            if (llama_model_meta_val_str(model_dft, "dflash.selector_top_k", buf, sizeof(buf)) >= 0) {
-                selector_top_k = std::atoi(buf);
-                is_dflash2 = selector_top_k > 0;
-            }
         }
+
+        selector_top_k = llama_model_dflash_selector_top_k(model_dft);
+        is_dflash2     = selector_top_k > 0;
         mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
 
         LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(type).c_str());
@@ -1000,6 +1000,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
         batch_inject = llama_batch_init(llama_n_batch(ctx_dft), n_embd_dec, n_seq);
+
+        // embd batches on an M-RoPE draft need 4 position rows per token
+        is_mrope = llama_model_rope_type(model_dft) == LLAMA_ROPE_TYPE_MROPE;
+        if (is_mrope) {
+            free(batch_inject.pos);
+            batch_inject.pos = (llama_pos *) malloc(sizeof(llama_pos) * 4 * llama_n_batch(ctx_dft));
+        }
 
         smpls.resize(n_seq);
         for (auto & s : smpls) {
@@ -1115,11 +1122,25 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 }
             }
 
+            // fuse extracted features through DFlash encoder
+            // M-RoPE drafts read 4 position rows per token from embd batches, so pass them explicitly
+            std::vector<llama_pos> enc_pos;
+            if (is_mrope) {
+                enc_pos.resize((size_t) 4 * n_chunk);
+                for (int32_t i = 0; i < n_chunk; ++i) {
+                    const llama_pos p = batch_in.pos[offset + i];
+                    enc_pos[0 * n_chunk + i] = p;
+                    enc_pos[1 * n_chunk + i] = p;
+                    enc_pos[2 * n_chunk + i] = p;
+                    enc_pos[3 * n_chunk + i] = 0;
+                }
+            }
+
             llama_batch enc_batch = {
                 /*.n_tokens =*/ n_chunk,
                 /*.token    =*/ nullptr,
                 /*.embd     =*/ features_buf.data(),
-                /*.pos      =*/ nullptr,
+                /*.pos      =*/ is_mrope ? enc_pos.data() : nullptr,
                 /*.n_seq_id =*/ nullptr,
                 /*.seq_id   =*/ nullptr,
                 /*.logits   =*/ nullptr,
@@ -1142,7 +1163,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 GGML_ASSERT(batch_in.n_seq_id[j] == 1);
                 const llama_seq_id seq_id = batch_in.seq_id[j][0];
                 GGML_ASSERT(seq_id >= 0 && seq_id < (llama_seq_id) n_seq);
-                batch_inject.pos[i]       = batch_in.pos[j];
+                const llama_pos p         = batch_in.pos[j];
+                batch_inject.pos[i]       = p;
+                if (is_mrope) {
+                    batch_inject.pos[1 * n_chunk + i] = p;
+                    batch_inject.pos[2 * n_chunk + i] = p;
+                    batch_inject.pos[3 * n_chunk + i] = 0;
+                }
                 batch_inject.n_seq_id[i]  = 1;
                 batch_inject.seq_id[i][0] = seq_id;
                 batch_inject.logits[i]    = false;

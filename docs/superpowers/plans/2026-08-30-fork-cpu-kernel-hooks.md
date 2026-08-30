@@ -63,16 +63,44 @@
 **Files:**
 - Create: `docs/fork/baseline-2026-08-30.md`
 
-- [ ] **Step 1: 벤치에 쓸 모델을 고르고 환경변수로 고정**
+- [ ] **Step 1: 벤치 설정 고정**
 
-이 포크가 실제로 돌리는 모델 하나를 고른다. 없으면 작은 것 하나를 받는다.
+사용자가 실제로 돌리는 서버 설정을 그대로 반영한 벤치를 쓴다. 원본 서버 커맨드라인:
+
+```
+llama-server -m /media/chynggi/EXTRA/Models/Serenity-26B-A4B-HB16-Q6_K.gguf \
+  -ncmoe 24 -c 81920 --port 7112 --flash-attn 1 -lv 4 --load-mode mlock \
+  --chat-template-file /home/chynggi/chat_template.jinja --expert-hot-s -1 \
+  --backend-sampling --kv-unified \
+  -md /media/chynggi/EXTRA/Models/gemma-4-26B-A4B-it-assistant.Q4_K_M.gguf \
+  --spec-type draft-mtp --spec-draft-n-max 2 \
+  -fit off -np 2 -n 2048 -ub 1024 -ctk q8_0 -ctv q8_0
+```
+
+`llama-bench`로 옮길 수 있는 것과 없는 것을 구분한다.
+
+| 서버 플래그 | llama-bench | 비고 |
+|---|---|---|
+| `-m Serenity-26B-A4B-HB16-Q6_K.gguf` | `-m` 동일 | 23.5 GB |
+| `-ncmoe 24` | `-ncmoe 24` | **이 벤치의 핵심.** MoE expert 24개 레이어를 CPU로 내림 |
+| `--flash-attn 1` | `-fa 1` | |
+| `-ctk q8_0 -ctv q8_0` | `-ctk q8_0 -ctv q8_0` | |
+| `-ub 1024` | `-ub 1024` | |
+| `--load-mode mlock` | `-lm mlock` | |
+| `-fit off` | `-fitt 0` | llama-bench의 `--fit-target`. `-fit off` 등가 |
+| `-c 81920` | 없음 | llama-bench는 `-p`/`-n`/`-d`로 컨텍스트를 유도한다 |
+| `-np 2`, `--kv-unified`, `--backend-sampling`, `--expert-hot-s -1`, spec decoding(`-md`, `--spec-type`) | 없음 | llama-bench는 서버 슬롯과 speculative decoding을 모사하지 않는다. 이 계획의 회귀 판정은 **원시 pp/tg**로 한다 |
 
 ```bash
-export FORK_BENCH_MODEL=$HOME/models/<사용할 모델>.gguf
+export FORK_BENCH_MODEL=/media/chynggi/EXTRA/Models/Serenity-26B-A4B-HB16-Q6_K.gguf
+export FORK_BENCH_ARGS="-ncmoe 24 -fa 1 -ctk q8_0 -ctv q8_0 -ub 1024 -lm mlock -fitt 0"
 ls -l "$FORK_BENCH_MODEL"
 ```
 
-이후 모든 태스크에서 **같은 파일**을 쓴다. 셸을 새로 열면 다시 `export` 한다.
+이후 모든 태스크에서 **같은 모델과 같은 인자**를 쓴다. 셸을 새로 열면 다시 `export` 한다.
+
+`-ncmoe 24`가 CPU MoE 경로를 강하게 태우므로, Phase 2B(`#20596`)와 Phase 3 커널의 효과가
+이 벤치에 직접 드러난다. 이 설정을 고른 이유가 그것이다.
 
 - [ ] **Step 2: 기준선 빌드**
 
@@ -87,14 +115,15 @@ cmake --build build -j$(nproc)
 ```bash
 ./build/bin/test-backend-ops > /tmp/fork-baseline-ops.txt 2>&1; echo "exit=$?"
 ctest --test-dir build > /tmp/fork-baseline-ctest.txt 2>&1; echo "exit=$?"
-./build/bin/llama-bench -m "$FORK_BENCH_MODEL" -p 512 -n 128 -r 5 | tee /tmp/fork-baseline-bench.txt
+./build/bin/llama-bench -m "$FORK_BENCH_MODEL" $FORK_BENCH_ARGS \
+    -p 512 -n 128 -r 3 | tee /tmp/fork-baseline-bench.txt
 ```
 
 기대: `test-backend-ops` exit=0. ctest는 실패가 있어도 무방하나 **어떤 테스트가 실패했는지 목록을 기록**한다 — 이후 "신규 실패 0"의 기준이 된다.
 
 - [ ] **Step 4: 기록 파일 작성**
 
-`docs/fork/baseline-2026-08-30.md`에 다음을 적는다: 기준선 커밋 해시, 모델 파일 경로와 크기, `llama-bench`의 pp512/tg128 수치와 표준편차, ctest 기존 실패 목록, CPU/GPU 모델명.
+`docs/fork/baseline-2026-08-30.md`에 다음을 적는다: 기준선 커밋 해시, `FORK_BENCH_MODEL`과 `FORK_BENCH_ARGS`의 값 그대로, `llama-bench`의 pp512/tg128 수치와 표준편차, ctest 기존 실패 목록, CPU/GPU 모델명(AVX2 / RTX 3060 12GB / RAM 62GB), 그리고 이 벤치가 모사하지 **않는** 것(서버 슬롯 `-np 2`, speculative decoding, `-c 81920`).
 
 - [ ] **Step 5: 커밋**
 
@@ -659,7 +688,8 @@ ctest --test-dir build -R test-fork-kernels --output-on-failure
 - [ ] **Step 9: 포크 버퍼 타입에 가중치가 할당되지 않는지 확인**
 
 ```bash
-./build/bin/llama-bench -m "$FORK_BENCH_MODEL" -p 32 -n 16 -v 2>&1 | grep -i "CPU_FORK" || echo "OK: no tensor placed in CPU_FORK"
+./build/bin/llama-bench -m "$FORK_BENCH_MODEL" $FORK_BENCH_ARGS \
+    -p 32 -n 16 -r 1 -v 2>&1 | grep -i "CPU_FORK" || echo "OK: no tensor placed in CPU_FORK"
 ```
 
 기대: `OK: no tensor placed in CPU_FORK`. `supports_op()`가 항상 false를 반환하므로 llama.cpp가 이 버퍼 타입을 가중치용으로 고르지 않아야 한다. 만약 `CPU_FORK`가 출력되면 이 설계는 성립하지 않는다 — 그 경우 스펙 3장의 대안(직접 후크: `ggml-cpu.c:1713`과 `:2899`에 각 1줄)으로 되돌리고 사용자에게 보고한다.
@@ -669,7 +699,7 @@ ctest --test-dir build -R test-fork-kernels --output-on-failure
 ```bash
 ./build/bin/test-backend-ops
 ctest --test-dir build --output-on-failure
-./build/bin/llama-bench -m "$FORK_BENCH_MODEL" -p 512 -n 128
+./build/bin/llama-bench -m "$FORK_BENCH_MODEL" $FORK_BENCH_ARGS -p 512 -n 128 -r 3
 ```
 
 기대: `test-backend-ops` 통과, ctest 신규 실패 0, `llama-bench` 수치가 Task 0에서 기록한 기준선과 측정 노이즈 범위 내(pp/tg 각각 ±3% 이내). 커널이 하나도 활성화되지 않았으므로 성능이 변하면 안 된다.

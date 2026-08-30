@@ -5,6 +5,7 @@
 #include "traits.h"
 #include "ggml-impl.h"
 #include "amx/amx.h"
+#include "fork/fork-kernels.h"
 
 #include <cctype>
 #include <string>
@@ -64,6 +65,12 @@ std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_type
 #ifdef GGML_USE_CPU_REPACK
         if (ggml_backend_cpu_repack_buffer_type()) {
             bufts.push_back(ggml_backend_cpu_repack_buffer_type());
+        }
+#endif
+
+#ifdef GGML_USE_CPU_FORK_KERNELS
+        if (ggml_backend_cpu_fork_buffer_type()) {
+            bufts.push_back(ggml_backend_cpu_fork_buffer_type());
         }
 #endif
 

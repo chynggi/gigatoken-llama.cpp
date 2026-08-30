@@ -56,6 +56,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/ops.cpp
         )
 
+    include(${CMAKE_CURRENT_SOURCE_DIR}/ggml-cpu/fork/fork.cmake)
+    list(APPEND GGML_CPU_SOURCES ${GGML_CPU_FORK_SOURCES})
+
     target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)
     target_include_directories(${GGML_CPU_NAME} PRIVATE . ggml-cpu)
 
@@ -575,6 +578,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (GGML_CPU_REPACK)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_REPACK)
+    endif()
+
+    if (GGML_CPU_FORK_KERNELS)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_FORK_KERNELS)
     endif()
 
     if (GGML_CPU_KLEIDIAI)

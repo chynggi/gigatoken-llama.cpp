@@ -791,7 +791,9 @@ upstream 파일은 건드리지 않는다.
 
 `GGML_FORK_KERNELS`는 첫 그래프 계산 때 한 번만 읽힌다.
 
-빌드에서 아예 빼려면 `-DGGML_CPU_FORK_KERNELS=OFF`로 재구성한다.
+디스패치 자체를 빌드에서 끄려면 `-DGGML_CPU_FORK_KERNELS=OFF`로 재구성한다.
+이 옵션은 `ggml-cpu.cpp`의 버퍼 타입 등록 블록만 없앤다 — `fork/` 소스는 여전히
+컴파일되지만 어디에서도 호출되지 않는다. CMake를 2줄로 유지하기 위한 의도적 선택이다.
 ```
 
 - [ ] **Step 3: 커밋**

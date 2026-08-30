@@ -23,14 +23,16 @@ upstream 파일에 남긴 흔적은 네 곳뿐이다 (`git diff --stat ed1c4004e
 | `ggml/src/ggml-cpu/CMakeLists.txt` | +7 | `include(fork/fork.cmake)` + `list(APPEND GGML_CPU_SOURCES ...)` 2줄, `GGML_USE_CPU_FORK_KERNELS` `target_compile_definitions` 블록 |
 | `ggml/src/ggml-cpu/ggml-cpu.cpp` | +7 | `#include "fork/fork-kernels.h"` 1줄, `ggml_backend_cpu_get_extra_buffer_types()` 안의 `#ifdef GGML_USE_CPU_FORK_KERNELS` 블록 |
 | `tests/CMakeLists.txt` | +11 | `test-fork-kernels` 빌드/등록 (아래 "테스트" 절 참고) |
-| `ggml/src/ggml-cpu/ggml-cpu.c` | +4 | 융합 후크 (아래 "융합 후크" 절 참고) |
+| `ggml/src/ggml-cpu/ggml-cpu.c` | +5/−1 | 융합 후크 (아래 "융합 후크" 절 참고) |
 
 디스패치 자체는 upstream이 원래 제공하는 확장점을 그대로 쓴다. 정의는
 `ggml/src/ggml-cpu/traits.cpp`의 `ggml_cpu_extra_compute_forward` /
 `ggml_cpu_extra_work_size`에 있고, 이 둘은 `ggml_backend_cpu_get_extra_buffer_types()`를
 순회한다. 호출부는 `ggml/src/ggml-cpu/ggml-cpu.c`의 `ggml_compute_forward`
 (op 스위치 진입 직전)와 `ggml_graph_plan`(work-size 계산 시)이다. `ops.cpp`는
-**한 줄도 수정하지 않았다.** `ggml-cpu.c`는 아래 융합 후크 4줄이 전부다.
+**한 줄도 수정하지 않았다.** `ggml-cpu.c`는 아래 융합 후크가 전부다.
+diff 집계는 +5/−1인데, 코드는 4줄(include 1줄, wsize 1줄, 폴백 2줄이
+기존 1줄을 대체)이고 나머지 한 줄은 빈 줄이 카운트된 것이다.
 
 ## 커널 추가 방법
 
@@ -90,7 +92,8 @@ size_t ggml_fork_extra_plan_wsize(const struct ggml_cgraph * cgraph, int node_n,
 `extra_plan_wsize`는 모든 커널의 **최댓값**이다 - work buffer는 공유되고 한
 노드는 한 커널만 계산하므로 합이 아니다.
 
-`ggml-cpu.c`에 들어간 4줄이 전부다:
+`ggml-cpu.c`에 들어간 코드는 4줄이 전부다 (`git diff --stat`은 빈 줄 하나가
+카운트되어 +5/−1로 집계된다):
 
     #include "fork/fork-kernels.h"
 
@@ -237,7 +240,7 @@ op 전체를 포크 레이어에서 재구현하거나, (2) `type_traits_cpu`의
 `ggml-cpu/` 밖이라 후크를 걸 수 없어 인라인으로 받은 변경이 생기면
 여기에 적는다. 각각 독립 커밋으로 유지해 개별 되돌림이 가능해야 한다.
 
-2026-08-30 현재: `ggml-cpu.c`의 융합 후크 4줄(위 "융합 후크" 절)뿐이다.
+2026-08-30 현재: `ggml-cpu.c`의 융합 후크 4줄(위 "융합 후크" 절)뿐이다 (diff 집계 +5/−1).
 독립 커밋으로 유지되어 있다. `ops.cpp`와 `ggml.c`는 여전히 미수정이며
 `git diff ed1c4004e..HEAD -- ggml/src/ggml-cpu/ops.cpp ggml/src/ggml.c`가
 빈 결과를 내는 것으로 확인했다.
@@ -254,11 +257,24 @@ op 전체를 포크 레이어에서 재구현하거나, (2) `type_traits_cpu`의
   같은 이름이 허용과 거부에 동시에 나오면 거부가 이긴다는 우선순위 규칙 확인.
 - `test-fork-kernels-zero` - `GGML_FORK_KERNELS=0`으로 전체를 껐을 때 stock
   결과가 나오는지 확인. `moe-fused-silu`가 기본 켜짐으로 등록된 뒤로는 "0"과
-  무설정이 실제로 다른 커널 집합을 만든다.
+  무설정이 실제로는 다른 커널 집합을 만든다. 다만 이 테스트가 도는 SCALE
+  그래프는 `selftest`도 `moe-fused-silu`도 claim하지 않으므로 **그 차이를
+  여전히 관측하지 못한다.** 융합 경로를 실제로 관측하는 판별력 있는 테스트는
+  아래 `test-moe-fused-silu-*` 케이스다.
+
+- `test-moe-fused-silu-stock` / `test-moe-fused-silu-fused` /
+  `test-moe-fused-silu-fused-nth1` - 융합 후크 경로의 회귀 방어.
+  `MUL_MAT_ID + MUL_MAT_ID + SWIGLU` 그래프를 stock 경로(환경변수로 커널 끔)와
+  융합 경로(기본)로 각각 돌려 하드코딩된 체크섬과 대조한다. `enabled_kernels()`가
+  프로세스당 한 번만 평가되므로 arm당 별도 케이스다. 두 체크섬이 2.3e-5 차이
+  나는 것(스칼라 vs AVX2 silu) 자체가 "융합 후크가 실제로 발동했다"는 증거다 -
+  후크가 죽으면 fused 케이스가 stock 값을 내고 실패한다. 체크섬 파생 방법은
+  `tests/fork/test-moe-fused-silu.cpp` 주석 참고. nth1 케이스는 단일 스레드
+  청킹 경로를, nth6 케이스는 동적 청킹 경로를 덮는다.
 
 실행:
 
-    ctest --test-dir build -R test-fork-kernels
+    ctest --test-dir build -R 'test-fork-kernels|test-moe-fused-silu'
 
 ## 회귀가 의심될 때
 

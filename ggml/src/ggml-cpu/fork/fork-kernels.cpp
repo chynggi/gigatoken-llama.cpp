@@ -132,3 +132,28 @@ const std::vector<kernel *> & enabled_kernels() {
 }
 
 }  // namespace ggml::cpu::fork
+
+// C entry points called from ggml-cpu.c.
+
+int ggml_fork_try_fuse_ops(const struct ggml_cgraph * cgraph, int node_n,
+                           struct ggml_compute_params * params,
+                           const struct ggml_cplan * cplan) {
+    for (ggml::cpu::fork::kernel * k : ggml::cpu::fork::enabled_kernels()) {
+        const int n_fused = k->try_fuse(cgraph, node_n, params, cplan);
+        if (n_fused != 0) {
+            return n_fused;
+        }
+    }
+    return 0;
+}
+
+size_t ggml_fork_extra_plan_wsize(const struct ggml_tensor * node, int n_tasks) {
+    size_t max = 0;
+    for (ggml::cpu::fork::kernel * k : ggml::cpu::fork::enabled_kernels()) {
+        const size_t cur = k->extra_plan_wsize(node, n_tasks);
+        if (cur > max) {
+            max = cur;
+        }
+    }
+    return max;
+}

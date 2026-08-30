@@ -302,11 +302,26 @@ add_test(NAME test-fork-kernels-deny-overrides-allow COMMAND $<TARGET_FILE:test-
 set_property(TEST test-fork-kernels-default              PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=")
 set_property(TEST test-fork-kernels-enabled              PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=selftest")
 set_property(TEST test-fork-kernels-deny-overrides-allow PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=selftest,-selftest")
-# With only a default-off kernel registered, this case is a smoke test (0
-# already matches the unset default); it becomes discriminating once a
-# default-on kernel exists (Phase 3).
+# With only a default-off kernel registered, this case was a smoke test (0
+# already matched the unset default). A default-on kernel now exists
+# (moe-fused-silu), so "0" really does select a different kernel set - but
+# the SCALE graph here is claimed by neither kernel, so this case still cannot
+# observe the difference. The discriminating test for the fusion path is the
+# test-moe-fused-silu-* pair below.
 add_test(NAME test-fork-kernels-zero COMMAND $<TARGET_FILE:test-fork-kernels> stock)
 set_property(TEST test-fork-kernels-zero PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=0")
+
+# Fusion-hook regression guard. enabled_kernels() is evaluated once per
+# process, so the stock and fused arms run as separate cases with different
+# GGML_FORK_KERNELS environments; each case checks a hard-coded checksum of
+# the same MUL_MAT_ID + MUL_MAT_ID + SWIGLU graph (derivation in the source).
+llama_build(fork/test-moe-fused-silu.cpp)
+add_test(NAME test-moe-fused-silu-stock      COMMAND $<TARGET_FILE:test-moe-fused-silu> stock 6)
+add_test(NAME test-moe-fused-silu-fused      COMMAND $<TARGET_FILE:test-moe-fused-silu> fused 6)
+add_test(NAME test-moe-fused-silu-fused-nth1 COMMAND $<TARGET_FILE:test-moe-fused-silu> fused 1)
+set_property(TEST test-moe-fused-silu-stock      PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=-moe-fused-silu")
+set_property(TEST test-moe-fused-silu-fused      PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=")
+set_property(TEST test-moe-fused-silu-fused-nth1 PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=")
 llama_build_and_test(test-console-progress.cpp)
 llama_build_and_test(test-ffn-offload.cpp)
 llama_build_and_test(

@@ -299,6 +299,7 @@ llama_build(test-fork-kernels.cpp)
 add_test(NAME test-fork-kernels-default              COMMAND $<TARGET_FILE:test-fork-kernels> stock)
 add_test(NAME test-fork-kernels-enabled              COMMAND $<TARGET_FILE:test-fork-kernels> selftest)
 add_test(NAME test-fork-kernels-deny-overrides-allow COMMAND $<TARGET_FILE:test-fork-kernels> stock)
+set_property(TEST test-fork-kernels-default              PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=")
 set_property(TEST test-fork-kernels-enabled              PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=selftest")
 set_property(TEST test-fork-kernels-deny-overrides-allow PROPERTY ENVIRONMENT "GGML_FORK_KERNELS=selftest,-selftest")
 # With only a default-off kernel registered, this case is a smoke test (0

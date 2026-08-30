@@ -1,5 +1,7 @@
 #include "fork-kernels.h"
+#include "ggml-impl.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -16,6 +18,18 @@ static std::vector<kernel *> & registry() {
 
 void register_kernel(kernel * k) {
     registry().push_back(k);
+}
+
+static std::string trim(const std::string & s) {
+    size_t b = 0;
+    while (b < s.size() && std::isspace((unsigned char) s[b])) {
+        b++;
+    }
+    size_t e = s.size();
+    while (e > b && std::isspace((unsigned char) s[e - 1])) {
+        e--;
+    }
+    return s.substr(b, e - b);
 }
 
 // GGML_FORK_KERNELS semantics:
@@ -43,7 +57,7 @@ static bool is_enabled(const kernel * k, const char * env) {
         if (comma == std::string::npos) {
             comma = spec.size();
         }
-        const std::string item = spec.substr(pos, comma - pos);
+        const std::string item = trim(spec.substr(pos, comma - pos));
         pos = comma + 1;
 
         if (item.empty()) {
@@ -70,9 +84,42 @@ static bool is_enabled(const kernel * k, const char * env) {
     return k->default_enabled();
 }
 
+// Warn about GGML_FORK_KERNELS items that match no registered kernel (likely
+// a typo), so a bad spec does not silently disable everything.
+static void warn_unknown_kernels(const char * env) {
+    if (env == nullptr || env[0] == '\0' || std::strcmp(env, "0") == 0) {
+        return;
+    }
+    const std::string spec(env);
+    size_t pos = 0;
+    while (pos <= spec.size()) {
+        size_t comma = spec.find(',', pos);
+        if (comma == std::string::npos) {
+            comma = spec.size();
+        }
+        const std::string item = trim(spec.substr(pos, comma - pos));
+        pos = comma + 1;
+        if (item.empty()) {
+            continue;
+        }
+        const std::string name = item[0] == '-' ? item.substr(1) : item;
+        bool found = false;
+        for (kernel * k : registry()) {
+            if (name == k->name()) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            GGML_LOG_WARN("GGML_FORK_KERNELS: unknown kernel name '%s'\n", name.c_str());
+        }
+    }
+}
+
 const std::vector<kernel *> & enabled_kernels() {
     static const std::vector<kernel *> enabled = [] {
         const char * env = std::getenv("GGML_FORK_KERNELS");
+        warn_unknown_kernels(env);
         std::vector<kernel *> out;
         for (kernel * k : registry()) {
             if (is_enabled(k, env)) {

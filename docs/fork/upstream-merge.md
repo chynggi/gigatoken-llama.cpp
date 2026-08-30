@@ -28,7 +28,7 @@ upstream 파일에 남긴 흔적은 네 곳뿐이다 (`git diff --stat ed1c4004e
 `ggml/src/ggml-cpu/traits.cpp`의 `ggml_cpu_extra_compute_forward` /
 `ggml_cpu_extra_work_size`에 있고, 이 둘은 `ggml_backend_cpu_get_extra_buffer_types()`를
 순회한다. 호출부는 `ggml/src/ggml-cpu/ggml-cpu.c`의 `ggml_compute_forward`
-(`ggml-cpu.c:1712`, op 스위치 진입 직전)와 `ggml_graph_plan`
+(`ggml-cpu.c:1713`, op 스위치 진입 직전)와 `ggml_graph_plan`
 (`ggml-cpu.c:2899`, work-size 계산 시)이다. 따라서 `ggml-cpu.c`와 `ops.cpp`는
 **한 줄도 수정하지 않았다.**
 
@@ -66,6 +66,15 @@ sizeof(float)`)에 걸리는 순간 **아무 경고 없이 무시된다.**
 `ggml-cpu.c:4001` 부근에서 한 번만 읽음)로 융합을 끄면 우회는 되지만, 그건
 진단용이지 해법이 아니다.
 
+### extra_buffer_type 순회 순서가 포크 커널을 가릴 수 있다
+
+포크 버퍼 타입은 `ggml_backend_cpu_get_extra_buffer_types()`(`ggml-cpu.cpp`)에서
+AMX/spacemit/kleidiai/repack 다음, 맨 마지막에 push된다. `traits.cpp`의
+`ggml_cpu_extra_compute_forward`는 이 벡터를 순서대로 돌다가 `get_tensor_traits(op)`가
+non-null을 반환하는 첫 extra에서 바로 return하므로, 가중치가 repack/AMX 버퍼에 올라간
+mul_mat은 포크 커널까지 순회가 오지 못하고 **아무 경고 없이** 무시된다. 이게 원인인지
+의심되면 `-DGGML_CPU_REPACK=OFF`로 재구성해 재포장 자체를 없애고 재현되는지 확인한다.
+
 ### `--no-extra-bufts`는 포크 커널을 끄지 않는다
 
 `--no-extra-bufts`(`common/arg.cpp`, `params.no_extra_bufts`)는
@@ -75,6 +84,15 @@ sizeof(float)`)에 걸리는 순간 **아무 경고 없이 무시된다.**
 전혀 보지 않으므로 포크 커널은 그대로 돌아간다. 이 플래그로 커널을 끄려던
 디버깅은 헛수고로 끝난다 - 실제로 끄는 스위치는 `GGML_FORK_KERNELS=0`이다
 (아래 "회귀가 의심될 때" 참고).
+
+### leaf `vec_dot` 커널은 이 레지스트리로 등록할 수 없다
+
+`ggml_vec_dot_q4_K_q8_K`류의 leaf 커널은 `ggml-cpu.c`의 `type_traits_cpu`
+함수 포인터 테이블(215번째 줄 부근, `static const`)을 통해 타입별로 디스패치되고
+`ggml_cpu_extra_compute_forward`를 전혀 거치지 않는다. 포크로 올리려면 (1) `mul_mat`
+op 전체를 포크 레이어에서 재구현하거나, (2) `type_traits_cpu`의 `const`를 떼고
+초기화 시점에 항목을 바꿔치기해야 한다. (2)는 "ggml-cpu.c 무수정" 원칙을 깨뜨리므로
+지금은 보류한다.
 
 ## 격리되지 않은 곳
 

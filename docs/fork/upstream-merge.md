@@ -235,15 +235,54 @@ op 전체를 포크 레이어에서 재구현하거나, (2) `type_traits_cpu`의
 초기화 시점에 항목을 바꿔치기해야 한다. (2)는 "ggml-cpu.c 무수정" 원칙을 깨뜨리므로
 지금은 보류한다.
 
-## 격리되지 않은 곳
+## 격리되지 않은 곳 (인라인 예외)
 
 `ggml-cpu/` 밖이라 후크를 걸 수 없어 인라인으로 받은 변경이 생기면
 여기에 적는다. 각각 독립 커밋으로 유지해 개별 되돌림이 가능해야 한다.
 
-2026-08-30 현재: `ggml-cpu.c`의 융합 후크 4줄(위 "융합 후크" 절)뿐이다 (diff 집계 +5/−1).
-독립 커밋으로 유지되어 있다. `ops.cpp`와 `ggml.c`는 여전히 미수정이며
+2026-08-30 현재: `ggml-cpu.c`의 융합 후크 4줄(위 "융합 후크" 절, diff 집계 +5/−1)과
+아래 mul_mat_id 워크 스틸링(+3/−10) 둘뿐이다. 각각 독립 커밋으로 유지되어 있다.
+`ops.cpp`와 `ggml.c`는 여전히 미수정이며
 `git diff ed1c4004e..HEAD -- ggml/src/ggml-cpu/ops.cpp ggml/src/ggml.c`가
 빈 결과를 내는 것으로 확인했다.
+
+### mul_mat_id 워크 스틸링 (upstream PR #25048)
+
+upstream PR #25048 "ggml-cpu: replace cyclic chunk distribution with atomic
+work-stealing" 중 `ggml_compute_forward_mul_mat_id`(`ggml/src/ggml-cpu/ggml-cpu.c`)에
+해당하는 부분만 인라인 적용했다. 400줄 함수를 포크 레이어에 통째로 복제해
+15줄 스케줄링을 바꾸는 것보다 인라인이 모든 유지보수 축에서 낫다는 판정으로,
+**이 fork의 첫 공식 인라인 예외**다 (융합 후크 4줄은 예외가 아니라 후크 표면
+자체였다).
+
+같은 PR의 2D `mul_mat` hunk 두 개는 의도적으로 적용하지 않았다. 대상 구성
+(Serenity-26B-A4B, `-ncmoe 24`)에서 CPU MUL_MAT(2D)은 실행되지 않고, 두
+카운터는 별개 메모리라 절반만 적용해도 내부 일관성이 유지된다: 2D는
+`params->threadpool->current_chunk`(구조체 필드), mul_mat_id는 호출별
+`atomic_current_chunk` wdata 배열(`[n_as]`, barrier 전에 각자 리셋)이다.
+
+변경 전부 (반드시 이 세 블록이 전부임을 유지):
+
+1. 리셋: 각 expert 카운터를 `*current_chunk_ctr = nth;` → `= 0;`
+2. 초기값: `int current_chunk = ith;` 삭제, `int current_chunk;` (미할당 선언) 유지
+3. 청크 획득: while 조건에서
+   `(current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed)) < nchunk0 * nchunk1`
+   로 청크를 가져오고, 루프 끝의 `if (nth >= nchunk0 * nchunk1) break;`와
+   fetch_add 2줄은 삭제
+
+즉 cyclic 분배(스레드가 `ith`부터 `nth` 간격으로 청크를 가져감)가 atomic
+워크 스틸링(모든 스레드가 공용 카운터에서 다음 청크를 경쟁적으로 가져감)으로
+바뀐다. 이득은 마지막 청크의 잔여 행 불균형(테일)에서만 나온다 — chunk
+비용이 균일하면 두 분배는 동등하다.
+
+**충돌 해결 레시피**: upstream 머지가 이 함수를 건드리면 위 세 가지를
+유지한다. 1) 리셋 값은 `0`, 2) 초기 `int current_chunk`에는 값을 넣지 말 것,
+3) 청크는 while 조건의 fetch_add로만 가져올 것.
+
+**되돌리는 법** (반대 방향 diff 3블록): 커밋을 revert하거나 수동으로
+1) `= 0;`을 `= nth;`로, 2) `int current_chunk;`를 `int current_chunk = ith;`로
+되돌리고, 3) while 조건을 `current_chunk < nchunk0 * nchunk1`로 되돌린 뒤
+루프 끝에 `if (nth >= nchunk0 * nchunk1) break;`와 fetch_add 2줄을 복원.
 
 ## 테스트
 

@@ -30,6 +30,12 @@ class kernel {
     // Extra work-buffer bytes needed for op. Return false to leave the size
     // to upstream. Returning true skips upstream's own size computation for
     // this node, so size must then be complete.
+    //
+    // Contract: only return true here for an op this kernel will also claim
+    // in compute_forward. Upstream skips its own sizing once we return true,
+    // so claiming an op and then declining it in compute_forward leaves the
+    // stock implementation running against a work buffer sized for us
+    // instead of for it, which can be too small and overrun.
     virtual bool work_size(int n_threads, const struct ggml_tensor * op, size_t & size) = 0;
 
     // Return true only if the op was fully computed here.

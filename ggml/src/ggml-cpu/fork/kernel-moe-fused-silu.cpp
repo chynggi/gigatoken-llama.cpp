@@ -273,6 +273,8 @@ class moe_fused_silu_kernel : public ggml::cpu::fork::kernel {
             return 0;
         }
 
+        // Same predicate extra_plan_wsize() gates on - see the contract note
+        // there. If these two ever diverge, the work buffer overruns.
         struct ggml_tensor * node0 = nullptr;
         struct ggml_tensor * node1 = nullptr;
         struct ggml_tensor * glu   = nullptr;
@@ -292,21 +294,35 @@ class moe_fused_silu_kernel : public ggml::cpu::fork::kernel {
     // shared one, so ask for that block on top. Deliberately not expressed as a
     // delta over upstream's term: staying purely additive means upstream can
     // change its MUL_MAT_ID sizing without silently invalidating this.
-    size_t extra_plan_wsize(const struct ggml_tensor * op, int n_tasks) override {
+    //
+    // The gate is match() - the very same predicate try_fuse() uses. The two
+    // MUST agree, and sharing one helper is how that is guaranteed:
+    //
+    //   - bytes requested here but not fused there: only wasted work buffer,
+    //     but it is wasted on every graph compute. Requesting unconditionally
+    //     at every plausible-looking MUL_MAT_ID cost a measured ~0.5% of tg on
+    //     a model whose MoE shape this kernel never actually fuses.
+    //   - fused there but not requested here: the kernel walks past the end of
+    //     the work buffer. This is the overrun trap described on
+    //     kernel::work_size in fork-kernels.h.
+    //
+    // match() only inspects the graph and tensor metadata, never tensor data,
+    // so it is safe to evaluate at planning time, before anything is computed.
+    size_t extra_plan_wsize(const struct ggml_cgraph * cgraph, int node_n, int n_tasks) override {
         if (fusion_disabled()) {
             return 0;
         }
-        if (op->op != GGML_OP_MUL_MAT_ID) {
+
+        struct ggml_tensor * node0 = nullptr;
+        struct ggml_tensor * node1 = nullptr;
+        struct ggml_tensor * glu   = nullptr;
+        if (!match(cgraph, node_n, &node0, &node1, &glu)) {
             return 0;
         }
-        const struct ggml_tensor * src0 = op->src[0];
-        const struct ggml_tensor * src1 = op->src[1];
-        if (src0 == nullptr || src1 == nullptr) {
-            return 0;
-        }
-        if (ggml_nrows(src1) != 1) {
-            return 0;  // fused path is token-generation only
-        }
+
+        const struct ggml_tensor * src0 = node0->src[0];
+        const struct ggml_tensor * src1 = node0->src[1];
+
         const enum ggml_type vec_dot_type = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
         if (src1->type == vec_dot_type) {
             return 0;  // no quantization buffer needed at all

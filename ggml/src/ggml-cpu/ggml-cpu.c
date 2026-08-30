@@ -3089,7 +3089,7 @@ struct ggml_cplan ggml_graph_plan(
             }
         }
 
-        cur += ggml_fork_extra_plan_wsize(node, n_tasks);
+        cur += ggml_fork_extra_plan_wsize(cgraph, i, n_tasks);
 
         work_size = MAX(work_size, cur);
     }

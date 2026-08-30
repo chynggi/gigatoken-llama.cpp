@@ -71,13 +71,27 @@ class kernel {
         return 0;
     }
 
-    // Extra work-buffer bytes this kernel needs for op, *added* to whatever
-    // upstream already computed for that node. Unlike work_size() above this is
-    // additive and non-destructive: upstream keeps doing its own sizing, so a
-    // fusion kernel that only needs some scratch on top of the stock layout
-    // does not have to duplicate (and then drift from) upstream's computation.
-    virtual size_t extra_plan_wsize(const struct ggml_tensor * op, int n_tasks) {
-        GGML_UNUSED(op);
+    // Extra work-buffer bytes this kernel needs for cgraph->nodes[node_n],
+    // *added* to whatever upstream already computed for that node. Unlike
+    // work_size() above this is additive and non-destructive: upstream keeps
+    // doing its own sizing, so a fusion kernel that only needs some scratch on
+    // top of the stock layout does not have to duplicate (and then drift from)
+    // upstream's computation.
+    //
+    // The graph is passed, not just the node, so that a fusion kernel can run
+    // its *own fusion predicate* here and ask for nothing at nodes it will not
+    // fuse. A kernel that cannot tell has to request bytes at every node whose
+    // shape merely looks plausible, which inflates the work buffer on every
+    // graph that never fuses - that is a measurable throughput loss, not a
+    // theoretical one (see docs/fork/upstream-merge.md).
+    //
+    // Contract: this must agree with try_fuse(). Asking for bytes at a node
+    // that is then not fused only wastes buffer, but fusing a node for which
+    // no bytes were requested overruns the work buffer. Drive both from one
+    // shared predicate so they cannot disagree.
+    virtual size_t extra_plan_wsize(const struct ggml_cgraph * cgraph, int node_n, int n_tasks) {
+        GGML_UNUSED(cgraph);
+        GGML_UNUSED(node_n);
         GGML_UNUSED(n_tasks);
         return 0;
     }
@@ -107,9 +121,9 @@ int ggml_fork_try_fuse_ops(const struct ggml_cgraph * cgraph, int node_n,
                            const struct ggml_cplan * cplan);
 
 // Called from ggml_graph_plan. Returns the maximum extra_plan_wsize() over all
-// enabled kernels for this node - the maximum, not the sum, because the work
-// buffer is shared and each node is computed by at most one kernel.
-size_t ggml_fork_extra_plan_wsize(const struct ggml_tensor * node, int n_tasks);
+// enabled kernels for cgraph->nodes[node_n] - the maximum, not the sum, because
+// the work buffer is shared and each node is computed by at most one kernel.
+size_t ggml_fork_extra_plan_wsize(const struct ggml_cgraph * cgraph, int node_n, int n_tasks);
 
 #ifdef __cplusplus
 }

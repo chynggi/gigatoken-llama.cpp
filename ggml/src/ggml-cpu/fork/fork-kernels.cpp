@@ -147,10 +147,10 @@ int ggml_fork_try_fuse_ops(const struct ggml_cgraph * cgraph, int node_n,
     return 0;
 }
 
-size_t ggml_fork_extra_plan_wsize(const struct ggml_tensor * node, int n_tasks) {
+size_t ggml_fork_extra_plan_wsize(const struct ggml_cgraph * cgraph, int node_n, int n_tasks) {
     size_t max = 0;
     for (ggml::cpu::fork::kernel * k : ggml::cpu::fork::enabled_kernels()) {
-        const size_t cur = k->extra_plan_wsize(node, n_tasks);
+        const size_t cur = k->extra_plan_wsize(cgraph, node_n, n_tasks);
         if (cur > max) {
             max = cur;
         }

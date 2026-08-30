@@ -8,4 +8,6 @@
 set(GGML_CPU_FORK_SOURCES
     ggml-cpu/fork/fork-kernels.h
     ggml-cpu/fork/fork-kernels.cpp
+    ggml-cpu/fork/fork-buffer-type.cpp
+    ggml-cpu/fork/kernel-selftest.cpp
     )

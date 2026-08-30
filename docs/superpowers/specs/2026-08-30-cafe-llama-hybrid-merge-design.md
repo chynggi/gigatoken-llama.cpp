@@ -77,6 +77,16 @@ upstream이 같은 함수를 개선할 때마다 수십 개 헝크를 손으로 
 
 ## 3. Phase 0 — `ggml-cpu/fork/` 격리 인프라
 
+> **정정 (2026-08-30, 구현 계획 작성 중 확인).** 이 장의 "upstream 침습 11줄" 표와
+> `add_subdirectory(fork)` 가정은 실제 코드와 다르다. (a) CPU 백엔드는
+> `ggml_add_cpu_backend_variant_impl()` 안에서 variant마다 빌드되므로
+> `add_subdirectory`가 동작하지 않는다. (b) upstream이 이미
+> `ggml_cpu_extra_compute_forward`(`ggml-cpu.c:1713`, op switch 직전)와
+> `ggml_cpu_extra_work_size`(`ggml-cpu.c:2899`)를 제공하므로 `ggml-cpu.c`·`ops.cpp`에
+> 후크를 새로 넣을 필요가 없다. 정정된 침습은 **4개 파일 / 12줄 이하**이며
+> `ggml-cpu.c`와 `ops.cpp`는 **한 줄도 수정하지 않는다**.
+> 확정된 내용은 `docs/superpowers/plans/2026-08-30-fork-cpu-kernel-hooks.md`를 따른다.
+
 ### 원칙
 
 **upstream 함수 본문은 한 줄도 수정하지 않는다.** 포크 커널은 전부 새 파일에 두고,

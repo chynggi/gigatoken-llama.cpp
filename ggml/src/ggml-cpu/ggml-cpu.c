@@ -15,6 +15,7 @@
 #include "ops.h"
 #include "ggml.h"
 #include "common.h"
+#include "fork/fork-kernels.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -3088,6 +3089,8 @@ struct ggml_cplan ggml_graph_plan(
             }
         }
 
+        cur += ggml_fork_extra_plan_wsize(node, n_tasks);
+
         work_size = MAX(work_size, cur);
     }
 
@@ -3184,7 +3187,8 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
         // Try fused ops, fall back to normal compute
-        const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
+        int n_fused = ggml_fork_try_fuse_ops(cgraph, node_n, &params, cplan);
+        if (n_fused == 0) { n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan); }
         if (n_fused > 0) {
             node_n += n_fused;
         } else {

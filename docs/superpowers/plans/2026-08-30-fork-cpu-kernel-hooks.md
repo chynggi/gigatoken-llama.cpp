@@ -812,4 +812,15 @@ git commit -m "docs: describe fork CPU kernel hooks and upstream re-merge"
 - [ ] `test-backend-ops` 통과, 전체 ctest 신규 실패 0
 - [ ] `llama-bench` 수치가 Task 0 기준선 대비 pp/tg 각각 ±3% 이내
 - [ ] `llama-bench -v` 출력에 `CPU_FORK` 버퍼 타입이 등장하지 않음
-- [ ] upstream 파일 수정이 4개 파일 / 12줄 이하
+- [ ] **핫 경로 무침습: `ggml-cpu.c`, `ops.cpp`, `ggml.c`, `traits.{h,cpp}` 수정 0줄**
+- [ ] 후크 표면(빌드 배선 + 등록 블록)이 3개 파일 / 20줄 이하
+- [ ] 테스트 등록(`tests/CMakeLists.txt`)은 파일 끝 append로만
+
+> **정정 (2026-08-30, Task 3에서 발견).** 원래 기준은 "upstream 파일 수정이 4개 파일 /
+> 12줄 이하"였다. 이는 두 가지가 틀렸다. (a) 스펙에서 11줄을 셀 때 `tests/CMakeLists.txt`를
+> 빠뜨렸다 — 테스트를 등록하려면 반드시 건드려야 하는 파일이다. (b) 성격이 전혀 다른 세 가지를
+> 한 숫자로 뭉쳤다. 실제 결과는 4개 파일 26줄이며 내역은 다음과 같다:
+> `ggml/CMakeLists.txt` +1, `ggml/src/ggml-cpu/CMakeLists.txt` +7,
+> `ggml/src/ggml-cpu/ggml-cpu.cpp` +7 (후크 표면 15줄),
+> `tests/CMakeLists.txt` +11 (테스트 등록, 파일 끝 append).
+> 정작 중요한 수치인 **핫 경로 0줄**은 달성됐다. 기준을 세 갈래로 나눠 정정한다.

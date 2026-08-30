@@ -62,21 +62,39 @@ upstream 파일은 건드리지 않는다.
   `cgraph->nodes[node_n]` **외에 추가로** 소비한 노드 수(3노드 융합이면 2),
   융합하지 않았으면 0. 호출부가 `node_n += n_fused`를 하고 루프의 `node_n++`가
   마지막 융합 노드를 넘어간다.
-- `extra_plan_wsize(op, n_tasks)` - `ggml_graph_plan`에서 upstream이 계산한
-  `cur`에 **더해진다**(가산적). 기존 `work_size()`(파괴적: true를 반환하면
-  upstream 계산을 통째로 건너뜀)와 혼동하지 말 것. 융합 커널이 stock 레이아웃
-  위에 스크래치만 더 필요할 때는 가산 쪽을 쓴다. 파괴적 쪽을 쓰면 upstream의
-  크기 계산을 복제해야 하고 upstream이 그 분기를 고칠 때마다 조용히 어긋난다.
+- `extra_plan_wsize(cgraph, node_n, n_tasks)` - `ggml_graph_plan`에서 upstream이
+  계산한 `cur`에 **더해진다**(가산적). 기존 `work_size()`(파괴적: true를
+  반환하면 upstream 계산을 통째로 건너뜀)와 혼동하지 말 것. 융합 커널이 stock
+  레이아웃 위에 스크래치만 더 필요할 때는 가산 쪽을 쓴다. 파괴적 쪽을 쓰면
+  upstream의 크기 계산을 복제해야 하고 upstream이 그 분기를 고칠 때마다 조용히
+  어긋난다.
 
-C 진입점은 `ggml_fork_try_fuse_ops`(첫 번째로 0이 아닌 값을 반환한 커널의 값)와
-`ggml_fork_extra_plan_wsize`(모든 커널의 **최댓값** - work buffer는 공유되고
-한 노드는 한 커널만 계산하므로 합이 아니다)이다.
+  노드 포인터가 아니라 **그래프와 노드 인덱스**를 받는 것이 핵심이다. 그래야
+  커널이 여기서 자기 융합 판정을 그대로 돌려보고 "이 노드는 융합 안 함 →
+  0바이트"라고 답할 수 있다. 텐서만 보면 융합 여부를 알 수 없어 모양이
+  그럴듯한 모든 노드에서 무조건 요청하게 되고, 실제로는 한 번도 융합하지 않는
+  그래프에서도 work buffer가 매 graph compute마다 부풀어 오른다. 이건 이론이
+  아니라 측정된 손실이다 (아래 `moe-fused-silu` 항목).
+
+C 진입점:
+
+```c
+int    ggml_fork_try_fuse_ops(const struct ggml_cgraph * cgraph, int node_n,
+                              struct ggml_compute_params * params,
+                              const struct ggml_cplan * cplan);
+size_t ggml_fork_extra_plan_wsize(const struct ggml_cgraph * cgraph, int node_n,
+                                  int n_tasks);
+```
+
+`try_fuse`는 첫 번째로 0이 아닌 값을 반환한 커널의 값을 그대로 돌려준다.
+`extra_plan_wsize`는 모든 커널의 **최댓값**이다 - work buffer는 공유되고 한
+노드는 한 커널만 계산하므로 합이 아니다.
 
 `ggml-cpu.c`에 들어간 4줄이 전부다:
 
     #include "fork/fork-kernels.h"
 
-    cur += ggml_fork_extra_plan_wsize(node, n_tasks);          // ggml_graph_plan
+    cur += ggml_fork_extra_plan_wsize(cgraph, i, n_tasks);     // ggml_graph_plan (i = 노드 루프 인덱스)
 
     int n_fused = ggml_fork_try_fuse_ops(cgraph, node_n, &params, cplan);
     if (n_fused == 0) { n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan); }
@@ -98,11 +116,19 @@ C 진입점은 `ggml_fork_try_fuse_ops`(첫 번째로 0이 아닌 값을 반환�
 3. **매 노드 × 매 스레드마다 불린다.** `try_fuse()`의 판정은 O(1) 검사부터
    시작해서 `ggml_can_fuse_subgraph()`나 버퍼 타입 순회 같은 비싼 검사는
    마지막에 두어야 한다.
-4. **`extra_plan_wsize()`는 그래프를 못 본다.** 시그니처가 `(op, n_tasks)`뿐이라
-   "이 노드가 실제로 융합될 것인가"를 알 수 없고, 융합 가능성이 있는 모양이면
-   무조건 더 요청하게 된다. 융합이 실제로는 일어나지 않는 모델에서는 그만큼
-   work buffer가 헛되이 커진다. 측정된 실제 비용은 아래 `moe-fused-silu` 항목
-   참고 - 무시할 수 있는 수준이 아니었다.
+4. **`extra_plan_wsize()`와 `try_fuse()`는 반드시 같은 판정을 써야 한다.**
+   둘을 하나의 공유 헬퍼(`moe-fused-silu`의 `match()`)로 몰아서 서로 어긋날 수
+   없게 만든다. 방향에 따라 결과가 다르다:
+
+   - **요청했는데 융합 안 함** - work buffer만 낭비된다. 치명적이진 않지만
+     매 graph compute마다 낭비되므로 공짜가 아니다. `extra_plan_wsize()`가
+     그래프를 못 보던 시절 이 커널은 그럴듯한 MUL_MAT_ID마다 무조건 요청했고,
+     실제로는 한 번도 융합하지 않는 모델에서 tg의 약 0.5%를 까먹었다.
+   - **융합했는데 요청 안 함** - 커널이 work buffer 끝을 넘어 쓴다.
+     `fork-kernels.h`의 `kernel::work_size` 주석에 있는 바로 그 오버런 함정이다.
+
+   판정 헬퍼는 그래프와 텐서 메타데이터만 보고 텐서 **데이터는 읽지 않아야**
+   한다. 계획 시점에는 아직 아무것도 계산되지 않았기 때문이다.
 
 ## 한계
 
@@ -153,25 +179,44 @@ mul_mat은 포크 커널까지 순회가 오지 못하고 **아무 경고 없이
 즉 사용자의 `Serenity-26B-A4B`(gemma4 26B.A4B) + `-ncmoe 24` 설정에서 이 커널은
 **한 번도 실행되지 않는다.**
 
-발동하지 않으면서도 비용은 든다. 2026-08-30 측정(교차 A/B, `-r 5`):
+**과거에는** 발동하지 않으면서 비용만 들었다. `extra_plan_wsize()`가 그래프를
+보지 못하던 시절(초기 설계) 측정한 교차 A/B, `-r 5`:
 
-| arm | tg128 t/s |
-|---|---|
-| `GGML_FORK_KERNELS=-moe-fused-silu` (끔) | 20.62 / 20.62 / 20.67 |
-| 기본 (켬) | 20.54 / 20.54 / 20.53 |
+| arm | tg128 t/s | 평균 |
+|---|---|---|
+| `GGML_FORK_KERNELS=-moe-fused-silu` (끔) | 20.62 / 20.62 / 20.67 | 20.637 |
+| 기본 (켬) | 20.54 / 20.54 / 20.53 | 20.537 |
 
-약 -0.5%로 재현성 있게 느리다. 원인을 분리해 보면 `try_fuse()` 쪽이 아니라
-**`extra_plan_wsize()`가 부풀린 work buffer**다. 위 "함정 4" 참고:
+-0.48%, 두 분포가 전혀 겹치지 않았다. probe로 원인을 분리하면 `try_fuse()`가
+아니라 **`extra_plan_wsize()`가 부풀린 work buffer**였다:
 
 | probe | tg128 t/s |
 |---|---|
 | `try_fuse`만 무력화 | 20.53 (회복 안 됨) |
 | `extra_plan_wsize`만 무력화 | 20.66 (회복) |
 
-`extra_plan_wsize()`는 텐서만 보고 판단하므로 "TG이고 MUL_MAT_ID이고 src1을
-양자화해야 함"이면 무조건 스레드별 양자화 버퍼를 요청한다. 융합이 실제로
-일어나지 않는 이 모델에서는 순수한 낭비다. gate/up이 분리된 SILU MoE 모델을
-쓰지 않는다면 `GGML_FORK_KERNELS=-moe-fused-silu`로 꺼 두는 편이 빠르다.
+**지금은 해소되었다.** 후크가 `(cgraph, node_n, n_tasks)`를 받게 되어
+`extra_plan_wsize()`가 `match()`를 직접 돌려보고 융합하지 않을 노드에서는
+0을 반환한다. 계측으로 확인: 이 모델의 전체 graph compute에서
+`extra_plan_wsize()`가 0이 아닌 값을 반환한 적은 **한 번도 없고**, 실제로
+융합이 일어나는 합성 그래프에서는 3888바이트를 반환한다. 즉 두 arm의
+work buffer 크기가 완전히 같다.
+
+수정 후 측정(총 23회 유효 실행, 순서 균형 A→B→A→B / B→A→B→A):
+
+| arm | n | 평균 tg128 | 표준편차 | 범위 |
+|---|---|---|---|---|
+| 끔 | 11 | 21.336 | 0.044 | 21.28 ~ 21.42 |
+| 켬 | 12 | 21.357 | 0.040 | 21.29 ~ 21.42 |
+
+차이 +0.02 t/s(+0.10%), t=1.20으로 **유의하지 않다**. 두 분포는 사실상 완전히
+겹친다. 한 세션 안에서는 arm이 깔끔하게 갈라져 보이는 일이 있었지만 그
+**부호가 세션마다 뒤집혔으므로**(어떤 세션은 켬이 빠르고 어떤 세션은 끔이
+빠름) arm 효과가 아니라 세션 단위 드리프트다. 위 수정 전 측정이 3쌍 모두
+같은 부호였고 기전까지 확인된 것과 대조적이다.
+
+결론: **이 모델에서 커널은 발동하지 않지만, 이제 비용도 없다.** 굳이 끌
+이유는 없다.
 
 커널 자체의 정확성은 합성 그래프(`MUL_MAT_ID + MUL_MAT_ID + swiglu_split`,
 Q6_K 가중치, n_tokens=1, nth=1/3/6)로 확인했다. stock 대비 상대 오차 ~1e-8로,

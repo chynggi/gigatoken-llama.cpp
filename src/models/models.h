@@ -2629,6 +2629,12 @@ struct llama_model_k2_horizon : public llama_model_base {
             const llama_model & model,
             const llm_graph_params & params
         );
+
+        ggml_tensor * build_routed_value (
+            const llama_layer & layer,
+            ggml_tensor * cur,
+            int il // layer index
+        ) const;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(

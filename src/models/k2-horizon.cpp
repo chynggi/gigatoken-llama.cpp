@@ -277,13 +277,9 @@ static ggml_tensor * k2_horizon_group_rms_norm(
     // bring back shape
     cur = ggml_reshape_2d(ctx, cur, n_embd, n_tokens);
 
-    // additional normalized * (1 + weights)
+    // apply the learned normalization weights
     if (weight != nullptr) {
-        cur = ggml_add(
-            ctx,
-            ggml_mul(ctx, cur, weight),
-            cur
-        );
+        cur = ggml_mul(ctx, cur, weight);
     }
 
     return cur;

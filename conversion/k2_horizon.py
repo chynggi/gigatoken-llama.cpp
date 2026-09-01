@@ -8,7 +8,10 @@ from torch import Tensor
 
 from .base import ModelBase, TextModel, gguf
 
-@ModelBase.register("K2HorizonForCausalLM")
+@ModelBase.register(
+    "K2HorizonForCausalLM",
+    "K2AuroraForCausalLM", # TODO: DELETE
+)
 @ModelBase.example(
     "IFM/K2-Horizon-0.9B",
     "IFM/K2-Horizon-36B",

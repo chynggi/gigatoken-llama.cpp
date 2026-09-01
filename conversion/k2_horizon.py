@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Iterable
 
 import torch
@@ -18,6 +19,19 @@ from .base import ModelBase, TextModel, gguf
 )
 class K2HorizonModel(TextModel):
     model_arch = gguf.MODEL_ARCH.K2HORIZON
+
+    def set_vocab(self):
+        super().set_vocab()
+
+        template_path = (
+            Path(__file__).parent.parent
+            / "models"
+            / "templates"
+            / "k2-horizon.jinja"
+        )
+        template = template_path.read_text(encoding="utf-8")
+        self.gguf_writer.remove_key(gguf.Keys.Tokenizer.CHAT_TEMPLATE)
+        self.gguf_writer.add_chat_template(template)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -195,5 +209,4 @@ class K2HorizonModel(TextModel):
                     "Unprocessed MoVA value experts: "
                     f"{remaining_value_experts}"
                 )
-
 

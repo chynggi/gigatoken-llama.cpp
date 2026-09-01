@@ -221,6 +221,8 @@ class ModelBase:
 
         prefix = "model" if not self.is_mistral_format else "consolidated"
         part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
+        if not part_names and not self.is_mistral_format:
+            part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".safetensors")
         is_safetensors: bool = len(part_names) > 0
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")

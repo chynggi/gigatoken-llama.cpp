@@ -692,6 +692,7 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_UP_EXP      = auto()
     FFN_GATE_SHEXP       = auto()
     FFN_DOWN_SHEXP       = auto()
+    FFN_MOE_NORM         = auto()
     FFN_UP_SHEXP         = auto()
     FFN_GATE_CHEXP       = auto()
     FFN_DOWN_CHEXP       = auto()
@@ -1435,6 +1436,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_UP:                    "blk.{bid}.ffn_up",
     MODEL_TENSOR.FFN_GATE_SHEXP:            "blk.{bid}.ffn_gate_shexp",
     MODEL_TENSOR.FFN_DOWN_SHEXP:            "blk.{bid}.ffn_down_shexp",
+    MODEL_TENSOR.FFN_MOE_NORM:              "blk.{bid}.ffn_moe_norm",
     MODEL_TENSOR.FFN_UP_SHEXP:              "blk.{bid}.ffn_up_shexp",
     MODEL_TENSOR.FFN_GATE_CHEXP:            "blk.{bid}.ffn_gate_chexps",
     MODEL_TENSOR.FFN_DOWN_CHEXP:            "blk.{bid}.ffn_down_chexps",
@@ -2844,6 +2846,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_MOE_NORM,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_GATE_EXP,

@@ -689,6 +689,10 @@ class TensorNameMap:
             "model.layers.{bid}.share_expert.down_proj",               # step3.5
         ),
 
+        MODEL_TENSOR.FFN_MOE_NORM: (
+            "model.layers.{bid}.mlp.moe_norm",                         # fuse4
+        ),
+
         MODEL_TENSOR.FFN_DOWN_CHEXP: (
             "model.layers.{bid}.mlp.chunk_experts.down_proj",           # grovemoe
         ),

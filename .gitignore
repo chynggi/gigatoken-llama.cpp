@@ -154,3 +154,8 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+# Local calibration/quantization artifacts
+/calibration_data.txt
+/gemma4.imatrix
+/quantize_pipeline.sh

@@ -105,6 +105,7 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_gate_shexp     = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,     "weight", il), { n_embd, n_ff_shexp }, flags);
         layer.ffn_up_shexp       = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,       "weight", il), { n_embd, n_ff_shexp }, flags);
         layer.ffn_down_shexp     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", il), { n_ff_shexp, n_embd }, flags);
+        layer.ffn_moe_norm       = create_tensor(tn(LLM_TENSOR_FFN_MOE_NORM,       "weight", il), { n_embd }, TENSOR_NOT_REQUIRED);
     };
 
     auto load_block_mtp = [&](int il) {
@@ -215,7 +216,8 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
         cb(attn_post_norm, "attn_post_norm", il);
 
         // MOE FFN layer
-        cur = build_layer_ffn(attn_post_norm, il);
+        // Fuse4: pass ffn_residual so build_layer_ffn_fuse4 can compute host_hidden = ffn_residual + shared_expert
+        cur = build_layer_ffn_fuse4(attn_post_norm, ffn_residual, il);
         cb(cur, "ffn_out", il);
 
         // Residual connection for FFN - add to the tensor from before post_attention_layernorm
@@ -491,6 +493,58 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
     // Reshape back to original dimensions
     cur = ggml_reshape_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
 
+    return cur;
+}
+
+ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn_fuse4(ggml_tensor * cur, ggml_tensor * ffn_residual, const int il) {
+    GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
+
+    if (model.layers[il].ffn_up_shexp != nullptr && model.layers[il].ffn_moe_norm != nullptr) {
+        // 1. Compute shared expert (host FFN) - no gating, always active
+        ggml_tensor * ffn_shexp =
+            build_ffn(cur,
+                model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
+                model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
+                model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
+                NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(ffn_shexp, "ffn_shexp", il);
+
+        // 2. host_hidden = ffn_residual + shared_expert (what experts/router see in Fuse4)
+        ggml_tensor * host_hidden = ggml_add(ctx0, ffn_residual, ffn_shexp);
+        cb(host_hidden, "host_hidden", il);
+
+        // 3. MoE experts operate on host_hidden
+        ggml_tensor * moe_out =
+            build_moe_ffn(host_hidden,
+                model.layers[il].ffn_gate_inp,
+                model.layers[il].ffn_up_exps,
+                model.layers[il].ffn_gate_exps,
+                model.layers[il].ffn_down_exps,
+                nullptr, n_expert, n_expert_used,
+                LLM_FFN_SILU, true,
+                hparams.expert_weights_scale,
+                LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
+                nullptr, model.layers[il].ffn_gate_up_exps,
+                model.layers[il].ffn_up_exps_s,
+                model.layers[il].ffn_gate_exps_s,
+                model.layers[il].ffn_down_exps_s);
+        cb(moe_out, "ffn_moe_out", il);
+
+        // 4. RMSNorm on MoE output
+        moe_out = build_norm(moe_out, model.layers[il].ffn_moe_norm, nullptr, LLM_NORM_RMS, il);
+        cb(moe_out, "ffn_moe_normed", il);
+
+        // 5. Apply static scale (gate * scale ~= 0.0184)
+        moe_out = ggml_scale(ctx0, moe_out, 0.018421f);
+        cb(moe_out, "ffn_moe_scaled", il);
+
+        // 6. Return shared_expert + moe_expert (residual added by caller)
+        cur = ggml_add(ctx0, ffn_shexp, moe_out);
+        cb(cur, "ffn_out", il);
+    } else {
+        // Standard path for non-Fuse4 layers
+        cur = build_layer_ffn(cur, il);
+    }
     return cur;
 }
 

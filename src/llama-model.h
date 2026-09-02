@@ -350,6 +350,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_shexp     = nullptr;
     struct ggml_tensor * ffn_down_shexp     = nullptr;
     struct ggml_tensor * ffn_up_shexp       = nullptr;
+    struct ggml_tensor * ffn_moe_norm       = nullptr; // Fuse4: RMSNorm after MoE
 
     // ff adjugate experts (chexps)
     struct ggml_tensor * ffn_gate_chexps     = nullptr;

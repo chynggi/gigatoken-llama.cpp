@@ -398,8 +398,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
-                    const int smem_offs_b = ggml_cuda_fattn_swz_bytes_rc<stride_tile, swz>(i, k*h2_per_chunk);
-                    cp_async_cg_16<preload>(tile_KV_32 + smem_offs_b, KV + i*stride_KV + k*h2_per_chunk);
+                    if constexpr (swz) {
+                        const int smem_offs_b = ggml_cuda_fattn_smem_swizzle::bytes_rc<stride_tile>(i, k*h2_per_chunk);
+                        cp_async_cg_16<preload>(tile_KV_32 + smem_offs_b, KV + i*stride_KV + k*h2_per_chunk);
+                    } else {
+                        cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV + i*stride_KV + k*h2_per_chunk);
+                    }
                 }
             }
         };
@@ -434,8 +438,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
-                    ggml_cuda_memcpy_1<16>((char*)tile_KV + ggml_cuda_fattn_swz_bytes_rc<stride_tile, swz>(i, k*h2_per_chunk),
-                        !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
+                    if constexpr (swz) {
+                        ggml_cuda_memcpy_1<16>((char *) tile_KV + ggml_cuda_fattn_smem_swizzle::bytes_rc<stride_tile>(i, k*h2_per_chunk),
+                            !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
+                    } else {
+                        ggml_cuda_memcpy_1<16>(tile_KV + i*stride_tile + k*4,
+                            !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
+                    }
                 }
             }
         };
@@ -571,10 +580,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages  (DKQ, DV, ncols1, ncols2);
 
     // swizzle the tile stride for K and V based on the batch size.
-    constexpr bool swz_K        = ggml_cuda_fattn_swz_enabled(nbatch_K2);
-    constexpr bool swz_V        = V_is_K_view ? swz_K        : ggml_cuda_fattn_swz_enabled(nbatch_V2);
-    constexpr int stride_tile_K = ggml_cuda_fattn_swz_tile_stride(nbatch_K2);
-    constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : ggml_cuda_fattn_swz_tile_stride(nbatch_V2);
+    constexpr int stride_tile_K = ggml_cuda_fattn_smem_swizzle::tile_stride(nbatch_K2);
+    constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : ggml_cuda_fattn_smem_swizzle::tile_stride(nbatch_V2);
+    constexpr bool swz_K = ggml_cuda_fattn_smem_swizzle::enabled(nbatch_K2);
+    constexpr bool swz_V = V_is_K_view ? swz_K : ggml_cuda_fattn_smem_swizzle::enabled(nbatch_V2);
 
     const int k_VKQ_0 = kb0 * nbatch_fa;
 #if defined(TURING_MMA_AVAILABLE)
@@ -627,8 +636,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 #pragma unroll
                 for (int k_KQ_0 = k0_start; k_KQ_0 < k0_stop; k_KQ_0 += T_A_KQ::J) {
                     T_A_KQ K_A;
-                    ggml_cuda_fattn_smem_swizzle::load_ldmatrix<T_A_KQ, stride_tile_K, swz_K>(
-                        K_A, tile_K, i_KQ_0, k_KQ_0 - k0_start);
+                    ggml_cuda_fattn_smem_swizzle::load_ldmatrix<stride_tile_K, swz_K>(K_A, tile_K, i_KQ_0, k_KQ_0 - k0_start);
                     if constexpr (cols_per_warp == 8) {
                         mma(KQ_C[i_KQ_00/(np*T_A_KQ::I)], K_A, Q_B[k_KQ_0/T_A_KQ::J]);
                     } else {
@@ -654,8 +662,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     const int i_KQ_0 = i_KQ_00 + (threadIdx.y % np)*T_A_KQ::I;
 
                     T_A_KQ K_A;
-                    ggml_cuda_fattn_smem_swizzle::load_ldmatrix<T_A_KQ, stride_tile_K, swz_K>(
-                        K_A, tile_K, i_KQ_0, k_KQ_0 - k0_start);
+                    ggml_cuda_fattn_smem_swizzle::load_ldmatrix<stride_tile_K, swz_K>(K_A, tile_K, i_KQ_0, k_KQ_0 - k0_start);
 
                     if constexpr (cols_per_warp == 8) {
                         mma(KQ_C[i_KQ_00/(np*T_A_KQ::I)], K_A, Q_B[0]);
@@ -984,9 +991,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::J;
 
                 T_A_VKQ A; // Transposed in SRAM but not in registers, gets transposed on load.
-                const int v_lin = (int)(tile_V_i - tile_V) + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2;
-                ggml_cuda_fattn_smem_swizzle::load_ldmatrix_trans<T_A_VKQ, stride_tile_V, swz_V>(
-                    A, tile_V, v_lin / stride_tile_V, v_lin % stride_tile_V);
+                ggml_cuda_fattn_smem_swizzle::load_ldmatrix_trans<stride_tile_V, swz_V>(A, tile_V, (int)(tile_V_i - tile_V) + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2);
                 if constexpr (T_B_KQ::I == 8) {
                     mma(VKQ_C[i_VKQ_0/T_A_VKQ::I], A, B[k00/(np*T_A_VKQ::J)]);
                 } else {
@@ -1012,9 +1017,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::I;
 
                 T_A_VKQ A; // Transposed in both SRAM and registers, load normally.
-                const int v_lin = (int)(tile_V_i - tile_V) + k0*stride_tile_V + (i_VKQ_0 - i0_start)/2;
-                ggml_cuda_fattn_smem_swizzle::load_ldmatrix<T_A_VKQ, stride_tile_V, swz_V>(
-                    A, tile_V, v_lin / stride_tile_V, v_lin % stride_tile_V);
+                ggml_cuda_fattn_smem_swizzle::load_ldmatrix<stride_tile_V, swz_V>(A, tile_V, (int)(tile_V_i - tile_V) + k0*stride_tile_V + (i_VKQ_0 - i0_start)/2);
                 mma(VKQ_C[i_VKQ_0/i0_stride], B[k00/(np*T_A_VKQ::I)], A);
             }
         }
@@ -1179,10 +1182,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
     constexpr int stride_tile_Q = DKQ/2     + 4;
     // swizzle the tile stride for K and V based on the batch size.
-    constexpr bool swz_K        = ggml_cuda_fattn_swz_enabled(nbatch_K2);
-    constexpr int stride_tile_K = ggml_cuda_fattn_swz_tile_stride(nbatch_K2);
-    constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : ggml_cuda_fattn_swz_tile_stride(nbatch_V2);
+    constexpr int stride_tile_K = ggml_cuda_fattn_smem_swizzle::tile_stride(nbatch_K2);
+    constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : ggml_cuda_fattn_smem_swizzle::tile_stride(nbatch_V2);
     constexpr int stride_tile_KV_max = stride_tile_K > stride_tile_V ? stride_tile_K : stride_tile_V;
+    constexpr bool swz_K = ggml_cuda_fattn_smem_swizzle::enabled(nbatch_K2);
+    constexpr bool swz_V = V_is_K_view ? swz_K : ggml_cuda_fattn_smem_swizzle::enabled(nbatch_V2);
 
     extern __shared__ half2 tile_Q[];
     half2 * tile_K    = Q_in_reg              ? tile_Q                             : tile_Q + ncols     * stride_tile_Q;
@@ -1441,12 +1445,16 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     constexpr int tile_stride = nbatch_combine + 4;
     static_assert((DV/2) % nbatch_combine == 0, "bad nbatch_combine");
 
+    constexpr bool combine_needs_sync = swz_K || swz_V;
+
     if constexpr (cols_per_warp == 8) {
         const int jc_cwmo = (threadIdx.x % (2*T_C_VKQ::J)) / T_C_VKQ::J; // jc combine write meta offset
         const int jc_cwm = threadIdx.y*(2*T_C_VKQ::J) + 2*T_C_VKQ::get_j(-1) + jc_cwmo; // jc combine write meta
         const float2 KQ_cmr = make_float2(KQ_max[jc_cwmo], KQ_rowsum[jc_cwmo]); // KQ combine max rowsum
 
-        __syncthreads();
+        if constexpr (combine_needs_sync) {
+            __syncthreads();
+        }
 
         if (((!needs_fixup && !is_fixup) || np > 1) && threadIdx.x < 2*T_C_VKQ::J) {
             // Use the 16 bytes of padding in each row to store the meta data: KQ max, KQ rowsum, KQ max scale.
@@ -1484,7 +1492,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         const bool thread_should_write = T_C_KQ::J == 8 || T_C_KQ::get_j(threadIdx.x & 2) < 8;
 #endif // defined(TURING_MMA_AVAILABLE)
 
-        __syncthreads();
+        if constexpr (combine_needs_sync) {
+            __syncthreads();
+        }
 
         if (((!needs_fixup && !is_fixup) || np > 1) && thread_should_write) {
             ((float2 *) tile_Q)[jc_cwm*(tile_stride/2) + nbatch_combine/2] = KQ_cmr;
@@ -1930,8 +1940,8 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     constexpr bool V_is_K_view = DKQ == 576; // Guaranteed by the kernel selection logic in fattn.cu
 
     // KV tile strides must match flash_attn_ext_f16_iter / _process_tile.
-    const int stride_tile_K = ggml_cuda_fattn_swz_tile_stride(nbatch_K2, cc);
-    const int stride_tile_V = V_is_K_view ? stride_tile_K : ggml_cuda_fattn_swz_tile_stride(nbatch_V2, cc);
+    const int stride_tile_K = ggml_cuda_fattn_smem_swizzle::tile_stride(nbatch_K2, cc);
+    const int stride_tile_V = V_is_K_view ? stride_tile_K : ggml_cuda_fattn_smem_swizzle::tile_stride(nbatch_V2, cc);
     const size_t nbytes_shared_KV_1stage = nbatch_fa            * std::max(stride_tile_K,  stride_tile_V) * sizeof(half2);
     const size_t nbytes_shared_KV_2stage = nbatch_fa            *         (stride_tile_K + stride_tile_V) * sizeof(half2);
     const size_t nbytes_shared_Q         = ncols                * (DKQ/2 + 4)                             * sizeof(half2);

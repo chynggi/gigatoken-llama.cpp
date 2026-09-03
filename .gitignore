@@ -33,6 +33,7 @@
 /.vs/
 /.vscode/
 /nppBackup
+.claude
 
 # Coverage
 

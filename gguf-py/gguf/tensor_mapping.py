@@ -1480,6 +1480,7 @@ class TensorNameMap:
         ## Vision encoder
 
         MODEL_TENSOR.V_MMPROJ: (
+            "aligner.w{bid}", # deepseek4v (w1 -> mm.1, w2 -> mm.2)
             "multi_modal_projector.linear_{bid}",
             "mm_projector.proj.linear_{bid}", # Kimi-K2.5
             "visual.merger.mlp.{bid}", # qwen2vl
@@ -1519,6 +1520,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
+            "vision.patch_embed.proj", # deepseek4v
             "model.vision_tower.vision_model.embeddings.patch_embedding", # Granite4Vision
             "vision_tower.vision_model.embeddings.patch_embedding",
             "model.vision_tower.embeddings.patch_embedding", # minicpmv4_6
@@ -1574,6 +1576,7 @@ class TensorNameMap:
 
         # TODO: I think these should all be moved to mapping_cfg?
         MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
+            "image_newline", # deepseek4v
             "model.image_newline",  # Deepseek-OCR, Granite4Vision
             "vit.perceive.image_newline", # HunyuanVL
         ),
@@ -1584,6 +1587,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "vision.blocks.{bid}.attn.wqkv", # deepseek4v
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "vision_tower.blocks.{bid}.attn.qkv", # dots.ocr
             "vision_encoder.blocks.{bid}.attn.qkv", # dots3note
@@ -1671,6 +1675,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "vision.blocks.{bid}.norm1", # deepseek4v
             "model.vision_tower.vision_model.encoder.layers.{bid}.layer_norm1", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
             "model.vision_tower.encoder.layers.{bid}.layer_norm1", # minicpmv4_6
@@ -1696,6 +1701,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
+            "vision.blocks.{bid}.attn.wo", # deepseek4v
             "model.vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_tower.encoder.layers.{bid}.self_attn.out_proj", # minicpmv4_6
@@ -1727,6 +1733,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
+            "vision.blocks.{bid}.norm2", # deepseek4v
             "model.vision_tower.vision_model.encoder.layers.{bid}.layer_norm2", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
             "model.vision_tower.encoder.layers.{bid}.layer_norm2", # minicpmv4_6
@@ -1753,6 +1760,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
+            "vision.blocks.{bid}.mlp.w1_up", # deepseek4v (split from fused w1)
             "vision_encoder.blocks.{bid}.mlp.fc3", # dots3note
             "model.vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
@@ -1779,6 +1787,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
+            "vision.blocks.{bid}.mlp.w1_gate", # deepseek4v (split from fused w1)
             "vision_encoder.blocks.{bid}.mlp.fc1", # dots3note
             "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
@@ -1788,6 +1797,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
+            "vision.blocks.{bid}.mlp.w2", # deepseek4v
             "vision_encoder.blocks.{bid}.mlp.fc2", # dots3note
             "model.vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
@@ -1873,6 +1883,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
+            "vision.norm", # deepseek4v
             "model.vision_tower.vision_model.post_layernorm", # Granite4Vision
             "vision_tower.vision_model.post_layernorm",
             "model.vision_tower.post_layernorm", # minicpmv4_6
@@ -1962,6 +1973,18 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: (
             "v.token_embd.img_break", # for pixtral, this is a generated vector
+        ),
+
+        MODEL_TENSOR.V_TOK_EMBD_IMG_START: (
+            "image_start", # deepseek4v
+        ),
+
+        MODEL_TENSOR.V_TOK_EMBD_IMG_END: (
+            "image_end", # deepseek4v
+        ),
+
+        MODEL_TENSOR.V_TOK_EMBD_IMG_PAD: (
+            "image_pad", # deepseek4v
         ),
 
         MODEL_TENSOR.V_MM_PATCH_MERGER: (

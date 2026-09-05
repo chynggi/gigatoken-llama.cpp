@@ -6,13 +6,15 @@ cd $SCRIPT_DIR
 
 set -eu
 
+WORKERS="${PYTEST_WORKERS:-auto}"
+
 if [ $# -lt 1 ]
 then
     if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
-        pytest -v -x
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal
     else
-        pytest -v -x -m "not slow"
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal -m "not slow"
     fi
 else
-    pytest "$@"
+    pytest --durations=30 -n "${WORKERS}" --dist=worksteal "$@"
 fi

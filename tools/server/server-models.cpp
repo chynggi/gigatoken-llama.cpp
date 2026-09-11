@@ -985,6 +985,11 @@ void server_models::load(const std::string & name, const load_options & opts) {
     cv.notify_all();
 }
 
+void server_models::request_stop(const std::string & name) {
+    stopping_models.insert(name);
+    cv_stop.notify_all();
+}
+
 void server_models::unload(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     auto it = mapping.find(name);
@@ -998,13 +1003,12 @@ void server_models::unload(const std::string & name) {
             });
         } else if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
-            stopping_models.insert(name);
             if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
                 // special case: if model is in loading state, unloading means force-killing it
                 SRV_WRN("model name=%s is still loading, force-killing\n", name.c_str());
                 it->second.subproc->terminate();
             }
-            cv_stop.notify_all();
+            request_stop(name);
             // status change will be handled by the managing thread
         } else {
             SRV_WRN("model instance name=%s is not running\n", name.c_str());
@@ -1022,8 +1026,7 @@ void server_models::unload_all() {
                 inst.subproc->stopped.store(true, std::memory_order_relaxed);
             } else if (inst.meta.is_running()) {
                 SRV_INF("stopping model instance name=%s\n", name.c_str());
-                stopping_models.insert(name);
-                cv_stop.notify_all();
+                request_stop(name);
                 // status change will be handled by the managing thread
             }
             // moving the thread to join list to avoid deadlock

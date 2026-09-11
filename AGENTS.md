@@ -6,6 +6,14 @@
 >
 > Read more: [CONTRIBUTING.md](CONTRIBUTING.md)
 
+> [!NOTE]
+>
+> **Fork override.** This repository is an independent fork. It is not linked to `ggml-org/llama.cpp` on GitHub, and it will never open a pull request against mainline/upstream.
+>
+> Rules below that exist to protect upstream review do not apply here. Specifically: **an agent may write commit messages.** Keep them short and in the project style (see "Code and Commit Standards"), and keep the `Assisted-by: <assistant name>` trailer.
+>
+> Everything else below still applies, including the ban on `git push`, on creating pull requests, and on writing or replying to comments.
+
 ---
 
 ## Guidelines for Contributors
@@ -44,7 +52,7 @@ AI-generated code is acceptable if you (1) fully understand it, (2) can debug it
 
 ### Prohibited AI Usage (results in immediate PR closure)
 
-- AI-written PR descriptions, commit messages, or reviewer responses
+- AI-written PR descriptions, commit messages, or reviewer responses (commit messages: see the fork override above)
 - Implementing features without understanding the codebase
 - Automated commits or PR submissions (may result in contributor ban)
 
@@ -88,7 +96,7 @@ Common mistakes that AI agents usually make:
 
 ### Prohibited Actions
 
-- Do NOT write PR descriptions, commit messages, or reviewer responses
+- Do NOT write PR descriptions or reviewer responses. Writing commit messages IS allowed in this fork, see the fork override at the top
 - Do NOT commit or push without explicit human approval for each action. If the user explicitly asks you to commit on their behalf, use `Assisted-by: <assistant name>` in the commit message, do NOT use `Co-authored-by:`
 - Do NOT implement features the contributor does not fully understand
 - Do NOT generate changes too extensive for the contributor to fully review
@@ -191,7 +199,7 @@ ggml_tensor * inp_pos = build_inp_pos();
 Commit message:
 
 ```
-// BEST: Let the user write the commit
+// BEST: Let the user write the commit (not required in this fork, see the fork override)
 
 
 // GOOD: Write a concise commit

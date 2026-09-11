@@ -34,6 +34,7 @@ llama_memory_recurrent::llama_memory_recurrent(
 
     this->n_rs_seq = n_rs_seq;
     rs_idx.assign(n_seq_max, 0);
+    rs_valid.assign(n_seq_max, 0);
 
     cells.clear();
     cells.resize(mem_size);
@@ -156,6 +157,8 @@ void llama_memory_recurrent::clear(bool data) {
     }
 
     std::fill(rs_idx.begin(), rs_idx.end(), 0);
+    // the snapshot planes are stale (or zeroed, when data) for every seq -- nothing may roll back
+    std::fill(rs_valid.begin(), rs_valid.end(), 0);
 }
 
 bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -177,6 +180,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     const bool rm_all = p0 == 0 && p1 == std::numeric_limits<llama_pos>::max();
     if (rm_all) {
         set_rs_idx(seq_id, 0);
+        rs_valid[seq_id] = 0;
     }
 
     // models like Mamba or RWKV can't have a state partially erased at the end
@@ -195,8 +199,12 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 const llama_pos rollback = cell.pos - (p0 - 1);
                 // pending rollback is single-use
                 const bool pending = rs_idx[seq_id] != 0;
-                if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
+                // n_rs_seq is the ring capacity, not the number of slots this sequence has
+                // actually filled -- bound the request by what was really written
+                const uint32_t have = rs_valid[seq_id];
+                if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq && rollback <= (llama_pos) have) {
                     set_rs_idx(seq_id, (uint32_t) rollback);
+                    rs_valid[seq_id] = have - (uint32_t) rollback;
                     cell.pos = p0 - 1;
                     return true;
                 }
@@ -279,6 +287,16 @@ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
 
             cell_src.seq_id.insert(seq_id_dst);
             tail_dst.tail = tail_src.tail;
+        }
+
+        // RB1b: the destination now shares the source's tail cell, so it shares the source's
+        // snapshot history too. Carrying none of this over left the copy with rs_valid == 0 (no
+        // rollback possible on a branch that demonstrably has one) while a stale rs_idx
+        // on the destination could still be consumed by the next s_copy.
+        const size_t nrs = rs_idx.size();
+        if ((size_t) seq_id_src < nrs && (size_t) seq_id_dst < nrs) {
+            rs_idx[seq_id_dst]   = rs_idx[seq_id_src];
+            rs_valid[seq_id_dst] = rs_valid[seq_id_src];
         }
     }
 }
@@ -668,6 +686,15 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
             const llama_seq_id seq_id = ubatch.seq_id[i][j];
             cell.seq_id.insert(seq_id);
             cells[seq_id].tail = cell_id;
+
+            // RB1b: this ubatch contributes n_seq_tokens new snapshots for the seq (the writer
+            // bound from llamAmpere 3772c377e), so that many more slots behind the head are now real.
+            // Saturates at the ring capacity; older slots survive, which is why this accumulates
+            // rather than assigns.
+            if (n_rs_seq != 0 && (size_t) seq_id < rs_valid.size()) {
+                const uint64_t grown = (uint64_t) rs_valid[seq_id] + n_seq_tokens;
+                rs_valid[seq_id] = grown > n_rs_seq ? n_rs_seq : (uint32_t) grown;
+            }
         }
     }
 
@@ -872,6 +899,13 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
 
     if (n_rs_seq != 0) {
         set_rs_idx(seq_id, 0);
+        // state_write serialises only the authoritative plane, not the n_rs_seq snapshot
+        // widening, so after a restore those planes hold whatever the buffer contained
+        if (seq_id == -1) {
+            std::fill(rs_valid.begin(), rs_valid.end(), 0);
+        } else if ((size_t) seq_id < rs_valid.size()) {
+            rs_valid[seq_id] = 0;
+        }
     }
 }
 

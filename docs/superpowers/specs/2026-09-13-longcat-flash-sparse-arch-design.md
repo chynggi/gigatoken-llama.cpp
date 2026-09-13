@@ -17,7 +17,7 @@
 - n-gram (OE) 해시 임베딩 12개 테이블
 - `longcat` pre-tokenizer, `</longcat_s>` EOG 등록
 - HF safetensors -> GGUF 컨버터
-- LSA indexer 텐서 로드 + LSA 마스크 입력 (`n_kv <= 2048`에서는 전부 가시라 항등)
+- LSA indexer 텐서 로드 + LSA 마스크 코드 이식 (S1 구간에서는 실행 경로에 들어가지 않음)
 - MTP 블록 `blk.28` **로드** (실행은 안 함)
 
 ### 제외 (후속 spec)
@@ -204,8 +204,12 @@ using llm_ngram_token_history =
 
 - `graph_max_nodes`: `max(n_tokens * 40, 32 * n_tensors)` 분기에 LongCat arch 추가
 - `longcat_lsa` 플래그는 arch가 `LONGCAT_FLASH_SPARSE`이면 항상 true다. 즉 이 모델은
-  S1에서도 `flash_attn`이 꺼진 채로 돈다. LSA 마스크도 매 decode마다 설정되지만
-  `n_kv <= index_topk` 구간에서는 모든 셀이 가시라 결과가 dense와 같다.
+  S1에서도 `flash_attn`이 꺼진 채로 돈다.
+- LSA 마스크 코드는 S1에서 **존재하되 실행되지 않는다.** `n_kv <= index_topk`이면
+  그래프 빌더가 `build_attn`에 `top_k = nullptr`를 넘겨 full-attention fast path를 타고,
+  indexer scoring이 그래프에 들어가지 않는다. 그러면 `self_kq_mask_lid`에 백엔드 버퍼가
+  없으므로 `set_input()`이 `buffer` 유무를 보고 마스크 채우기를 건너뛴다.
+  DSA 메모리는 이 구간에서도 indexer K 이력은 계속 저장한다 (나중에 2048을 넘길 때 필요).
 - KV 캐시는 `llama_kv_cache_dsa`를 쓰고, `filter_lid`는 `hparams.is_indexer_full(il)`로
   indexer owner 블록만 통과시킨다 (GLM_DSA와 동일 취급)
 
@@ -224,7 +228,7 @@ using llm_ngram_token_history =
 | n-gram input | `src/llama-graph.{h,cpp}` | `llm_graph_input_ngram`, 토큰 이력 |
 | MoE route | `src/llama-graph.cpp` | `llm_graph_build_longcat_moe_route` |
 | KV 제약 | `src/llama-memory.{h,cpp}` | `llama_memory_params_resolve` |
-| LSA mask | `src/llama-kv-cache.{h,cpp}` | `set_input_longcat_lsa_mask` (S1 구간에서는 항등 마스크) |
+| LSA mask | `src/llama-kv-cache.{h,cpp}` | `set_input_longcat_lsa_mask` (S1 구간에서는 미실행) |
 | 토크나이저 | `src/llama-vocab.{h,cpp}` | pre-type, EOG |
 | 컨버터 | `conversion/longcat_flash_ngram.py` | HF -> GGUF |
 | GGUF 상수 | `gguf-py/gguf/{constants,gguf_writer,tensor_mapping}.py` | 신규 KV/텐서 |
@@ -238,9 +242,17 @@ Sparse 메타데이터와 파라미터화된 indexer 텐서만 추가한다.
 upstream을 여러 번 머지했다. 커밋 히스토리(453개, 대부분 연구 산출물)는 버리고
 **최종 상태의 diff를 기능 단위로 재구성**한다.
 
-`common/debug.cpp`의 +1137줄은 진단 계측이므로 **제외**한다.
+다음 두 덩어리는 **제외**한다:
 
-충돌 예상 파일: `llama-arch.cpp`, `llama-graph.cpp`, `llama-kv-cache.cpp`, `llama-model.cpp`.
+- `common/debug.cpp` +1137줄: 진단 계측
+- `src/llama-arch.cpp`의 `llm_get_tensor_names()` +2050줄: 모든 arch를 나열한 신규 함수인데
+  유일한 호출자가 자기 자신(SPARSE -> NGRAM 재귀)뿐인 **죽은 코드**다. gigatoken은
+  per-arch 텐서 집합을 쓰지 않고 각 모델의 `load_arch_tensors()`에서 직접 로드하므로
+  필요 없다. AGENTS.md의 "새 서브시스템 추가 지양"에도 걸린다.
+
+이 둘을 빼면 실질 포팅 물량은 약 4,250줄이고 `llama-arch.cpp` 변경은 약 40줄로 줄어든다.
+
+충돌 예상 파일: `llama-graph.cpp`, `llama-kv-cache.cpp`, `llama-model.cpp`.
 
 AGENTS.md 요구에 따라 각 hunk를 이해하고 옮긴다. 기계적 복사는 하지 않는다.
 

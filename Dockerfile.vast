@@ -1,9 +1,18 @@
 # syntax=docker/dockerfile:1
 
+# Toolkit used to build the fork and the runtime libs copied into the final
+# image. Keep the CUDA major equal to VAST_BASE_IMAGE below. Selected by the
+# "Build Vast Docker image" workflow through --build-arg.
+ARG BUILDER_IMAGE=nvidia/cuda:13.2.1-devel-ubuntu24.04
+ARG RUNTIME_IMAGE=nvidia/cuda:13.2.1-runtime-ubuntu24.04
+
+# Vast.ai runtime image the fork binaries are dropped into.
+ARG VAST_BASE_IMAGE=vastai/llama-cpp:b10909-mix-bea84f7-cuda-13.2
+
 # ------------------------------------------------------------
 # Stage 1: Build gigatoken-llama.cpp for RTX 5090 / Blackwell
 # ------------------------------------------------------------
-FROM nvidia/cuda:12.9.2-devel-ubuntu24.04 AS builder
+FROM ${BUILDER_IMAGE} AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -84,9 +93,11 @@ RUN --mount=type=cache,target=/root/.ccache \
 
 # ------------------------------------------------------------
 # Stage 1.5: CUDA runtime libraries
-# Provides libcuda.so.1 and CUDA runtime for linking
+# Provides the matching runtime for the final image. The Vast base
+# installs the CUDA toolkit without libcublas, which ggml-cuda
+# links against.
 # ------------------------------------------------------------
-FROM nvidia/cuda:12.9.2-runtime-ubuntu24.04 AS runtime-libs
+FROM ${RUNTIME_IMAGE} AS runtime-libs
 
 # No additional setup needed; this stage just exports the runtime libs
 
@@ -95,26 +106,39 @@ FROM nvidia/cuda:12.9.2-runtime-ubuntu24.04 AS runtime-libs
 # Vast.ai runtime + compiled binaries + CUDA libs.
 # Both final images below derive from this.
 # ------------------------------------------------------------
-FROM vastai/llama-cpp:b10435-cuda-12.9 AS runtime-base
+FROM ${VAST_BASE_IMAGE} AS runtime-base
 
 USER root
 
-# Copy CUDA runtime libraries from official CUDA runtime image
-# to ensure libcuda.so.1 and friends are available
+# Copy CUDA runtime libraries from official CUDA runtime image.
+# Same major as the base image, so this only fills in what the
+# toolkit packages did not bring.
 COPY --from=runtime-libs /usr/local/cuda/lib64/ /usr/local/cuda/lib64/
 
 # Replace Vast's llama.cpp distribution with the fork build.
 #
-# Keep the same directory because Vast already exports:
-#   LLAMA_CPP_DIR=/opt/llama.cpp/cuda-12.8
-#   PATH=/opt/llama.cpp/cuda-12.8:$PATH
+# This image keeps the engine in /opt/llama.cpp itself (Unsloth
+# portable bundle layout) and exports:
+#   LLAMA_CPP_DIR=/opt/llama.cpp
+#   PATH=/opt/llama.cpp:$PATH
+# so the fork lands on PATH under the same names.
 #
-COPY --from=builder /src/build/bin/ /opt/llama.cpp/cuda-12.8/
+# Drop the stock bundle first: its shared libraries would otherwise
+# stay on the loader path next to ours.
+RUN rm -rf /opt/llama.cpp
+COPY --from=builder /src/build/bin/ /opt/llama.cpp/
+
+# The fork links its own libs (libllama.so, libggml*.so) from this
+# directory, and the script that used to register the bundle with
+# ldconfig (06-llama-cuda.sh) no longer exists in this image. The path
+# has no "cuda" in it, so 05-configure-cuda.sh's ld.so.conf cleanup
+# leaves this entry alone at boot.
+RUN echo /opt/llama.cpp > /etc/ld.so.conf.d/50-llama.conf && ldconfig
 
 # Useful metadata so it is obvious this is not stock Vast llama.cpp.
 ENV LLAMA_CPP_RELEASE=gigatoken
-ENV LLAMA_CPP_DIR=/opt/llama.cpp/cuda-12.8
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
+ENV LLAMA_CPP_DIR=/opt/llama.cpp
+ENV LD_LIBRARY_PATH=/opt/llama.cpp:/usr/local/cuda/lib64
 
 # Do NOT override ENTRYPOINT.
 # Inherited:
@@ -130,8 +154,8 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
 # ------------------------------------------------------------
 FROM runtime-base AS runtime-qwen
 
-COPY --from=builder /opt/qwen-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
-ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
+COPY --from=builder /opt/qwen-chat-template.jinja /opt/llama.cpp/chat_template.jinja
+ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/chat_template.jinja
 
 # ------------------------------------------------------------
 # Stage 3a2: Runtime with the Qwen-Sharp chat template
@@ -143,8 +167,8 @@ ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
 # ------------------------------------------------------------
 FROM runtime-base AS runtime-qwen-sharp
 
-COPY --from=builder /opt/qwen-sharp-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
-ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
+COPY --from=builder /opt/qwen-sharp-chat-template.jinja /opt/llama.cpp/chat_template.jinja
+ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/chat_template.jinja
 
 # ------------------------------------------------------------
 # Stage 3b: Runtime with the canonical Gemma 4 chat template
@@ -153,8 +177,8 @@ ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
 # ------------------------------------------------------------
 FROM runtime-base AS runtime-gemma
 
-COPY --from=builder /opt/gemma-chat-template.jinja /opt/llama.cpp/cuda-12.8/chat_template.jinja
-ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/cuda-12.8/chat_template.jinja
+COPY --from=builder /opt/gemma-chat-template.jinja /opt/llama.cpp/chat_template.jinja
+ENV LLAMA_ARG_CHAT_TEMPLATE_FILE=/opt/llama.cpp/chat_template.jinja
 
 # ------------------------------------------------------------
 # Stage 3c: Stock runtime (no chat template override)

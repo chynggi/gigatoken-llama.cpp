@@ -12,6 +12,14 @@ on:
           - runtime-qwen-sharp
           - runtime-gemma
         default: runtime
+      cuda:
+        description: "CUDA toolkit version (sets the driver floor of the image)"
+        type: choice
+        options:
+          - "12.8"
+          - "12.9"
+          - "13.2"
+        default: "13.2"
       push:
         description: "Push to GHCR"
         type: boolean
@@ -40,22 +48,81 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine image tag
+      - name: Resolve build args
+        id: args
+        shell: bash
+        env:
+          CUDA: ${{ inputs.cuda }}
+        run: |
+          set -euo pipefail
+          # The toolkit and the Vast base must share a CUDA major. Vast ships
+          # the flat /opt/llama.cpp layout on 12.9 and 13.2 only, so the 12.8
+          # build runs on the 12.9 image (12.x is minor-version compatible).
+          case "$CUDA" in
+            12.8)
+              BUILDER=nvidia/cuda:12.8.2-devel-ubuntu24.04
+              RUNTIME=nvidia/cuda:12.8.2-runtime-ubuntu24.04
+              BASE=vastai/llama-cpp:b10909-mix-bea84f7-cuda-12.9
+              SLUG=cu128
+              ;;
+            12.9)
+              BUILDER=nvidia/cuda:12.9.2-devel-ubuntu24.04
+              RUNTIME=nvidia/cuda:12.9.2-runtime-ubuntu24.04
+              BASE=vastai/llama-cpp:b10909-mix-bea84f7-cuda-12.9
+              SLUG=cu129
+              ;;
+            13.2)
+              BUILDER=nvidia/cuda:13.2.1-devel-ubuntu24.04
+              RUNTIME=nvidia/cuda:13.2.1-runtime-ubuntu24.04
+              BASE=vastai/llama-cpp:b10909-mix-bea84f7-cuda-13.2
+              SLUG=cu132
+              ;;
+            *)
+              echo "unsupported cuda version: ${CUDA}" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "builder=${BUILDER}"
+            echo "runtime=${RUNTIME}"
+            echo "base=${BASE}"
+            echo "slug=${SLUG}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Determine image tags
         id: meta
         shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          SLUG: ${{ steps.args.outputs.slug }}
+          IMAGE_REPO: ghcr.io/${{ github.repository }}
         run: |
-          TARGET="${{ inputs.target }}"
+          set -euo pipefail
           if [[ "$TARGET" == "runtime" ]]; then
             SUFFIX=""
           else
             SUFFIX="-${TARGET#runtime-}"
           fi
           SHORT_SHA="${GITHUB_SHA::10}"
-          echo "suffix=${SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "image=${IMAGE_REPO}:latest${SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "image_sha=${IMAGE_REPO}:${SHORT_SHA}${SUFFIX}" >> "$GITHUB_OUTPUT"
-        env:
-          IMAGE_REPO: ghcr.io/${{ github.repository }}
+          tags=(
+            "${IMAGE_REPO}:latest-${SLUG}${SUFFIX}"
+            "${IMAGE_REPO}:${SHORT_SHA}-${SLUG}${SUFFIX}"
+          )
+          # Keep the unversioned tags on the default toolkit, so templates that
+          # already reference :latest do not silently stay on an old build.
+          if [[ "$SLUG" == "cu132" ]]; then
+            tags+=(
+              "${IMAGE_REPO}:latest${SUFFIX}"
+              "${IMAGE_REPO}:${SHORT_SHA}${SUFFIX}"
+            )
+          fi
+          {
+            echo "tags<<TAGS_EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "TAGS_EOF"
+            echo "cache_scope=${TARGET}-${SLUG}"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Building target=%s with cuda=%s\n' "$TARGET" "$SLUG"
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -64,9 +131,11 @@ jobs:
           file: Dockerfile.vast
           target: ${{ inputs.target }}
           push: ${{ inputs.push }}
-          tags: |
-            ${{ steps.meta.outputs.image }}
-            ${{ steps.meta.outputs.image_sha }}
-          cache-from: type=gha,scope=${{ inputs.target }}
-          cache-to: type=gha,mode=max,scope=${{ inputs.target }}
+          build-args: |
+            BUILDER_IMAGE=${{ steps.args.outputs.builder }}
+            RUNTIME_IMAGE=${{ steps.args.outputs.runtime }}
+            VAST_BASE_IMAGE=${{ steps.args.outputs.base }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=${{ steps.meta.outputs.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ steps.meta.outputs.cache_scope }}
           provenance: false

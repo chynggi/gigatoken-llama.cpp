@@ -399,7 +399,10 @@ common_models_handler common_models_handler_init(const common_params & params, l
                         && params.mmproj.path.empty() && params.mmproj.url.empty();
 
     if (!params.model.hf_repo.empty()) {
-        plan = common_download_get_hf_plan(params.model, opts);
+        // the MTP head can also live inside the main model, see --no-mtp-sidecar
+        auto opts_main = opts;
+        opts_main.download_mtp = opts.download_mtp && !params.no_mtp_sidecar;
+        plan = common_download_get_hf_plan(params.model, opts_main);
     }
 
     if (!params.speculative.draft.mparams.hf_repo.empty()) {
@@ -3135,6 +3138,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
         }
     ).set_examples({LLAMA_EXAMPLE_DOWNLOAD}));
+    add_opt(common_arg(
+        {"--mtp-sidecar"},
+        {"--no-mtp-sidecar"},
+        string_format("resolve a separate MTP head from the -hf repo when --spec-type draft-mtp is set (default: %s)", params.no_mtp_sidecar ? "disabled" : "enabled"),
+        [](common_params & params, bool value) {
+            params.no_mtp_sidecar = !value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MTP_SIDECAR"));
     add_opt(common_arg(
         {"--dflash"},
         "also download the DFlash sidecar, if available (default: unused)",

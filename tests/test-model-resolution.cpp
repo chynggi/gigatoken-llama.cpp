@@ -401,6 +401,33 @@ static void test_task_assembly() {
         REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/main", "mtp-model-Q8_0.gguf"));
     }
     {
+        // --no-mtp-sidecar keeps the MTP head inside the main model
+        common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp", "--no-mtp-sidecar"}, params);
+        REQUIRE_EQ(params.model.path, cached("test/main", "model-Q8_0.gguf"));
+        REQUIRE(params.speculative.draft.mparams.path.empty());
+    }
+    {
+        // an explicit --mtp-sidecar keeps the main repo fallback
+        common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp", "--mtp-sidecar"}, params);
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/main", "mtp-model-Q8_0.gguf"));
+    }
+    {
+        // --no-mtp-sidecar only gates the main repo, an explicit draft repo still resolves
+        common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/hole:Q4_0", "--spec-type", "draft-mtp", "--no-mtp-sidecar"}, params);
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/hole", "mtp-model-Q4_0.gguf"));
+    }
+    {
+        // the env var form disables the same resolution
+        common_params params;
+        common_set_env("LLAMA_ARG_MTP_SIDECAR", "false");
+        assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp"}, params);
+        REQUIRE(params.speculative.draft.mparams.path.empty());
+        common_set_env("LLAMA_ARG_MTP_SIDECAR", "true");
+    }
+    {
         // -hfd with a spec type wires the draft repo sidecar at its tag,
         // not its full model, and suppresses the main repo fallback
         common_params params;

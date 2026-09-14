@@ -1,0 +1,81 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 37233d3bf..b47e3bcd4 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -399,7 +399,10 @@ common_models_handler common_models_handler_init(const common_params & params, l
+                         && params.mmproj.path.empty() && params.mmproj.url.empty();
+ 
+     if (!params.model.hf_repo.empty()) {
+-        plan = common_download_get_hf_plan(params.model, opts);
++        // the MTP head can also live inside the main model, see --no-mtp-sidecar
++        auto opts_main = opts;
++        opts_main.download_mtp = opts.download_mtp && !params.no_mtp_sidecar;
++        plan = common_download_get_hf_plan(params.model, opts_main);
+     }
+ 
+     if (!params.speculative.draft.mparams.hf_repo.empty()) {
+@@ -3135,6 +3138,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+         }
+     ).set_examples({LLAMA_EXAMPLE_DOWNLOAD}));
++    add_opt(common_arg(
++        {"--mtp-sidecar"},
++        {"--no-mtp-sidecar"},
++        string_format("resolve a separate MTP head from the -hf repo when --spec-type draft-mtp is set (default: %s)", params.no_mtp_sidecar ? "disabled" : "enabled"),
++        [](common_params & params, bool value) {
++            params.no_mtp_sidecar = !value;
++        }
++    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MTP_SIDECAR"));
+     add_opt(common_arg(
+         {"--dflash"},
+         "also download the DFlash sidecar, if available (default: unused)",
+diff --git a/common/common.h b/common/common.h
+index 302ab6499..dd736e0e2 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -606,6 +606,7 @@ struct common_params {
+     bool mmproj_use_gpu = true;                 // use GPU for multimodal model
+     ggml_backend_dev_t mmproj_device = nullptr; // GPU device to use for multimodal model
+     bool no_mmproj = false;                     // explicitly disable multimodal model
++    bool no_mtp_sidecar = false;                // do not resolve a separate MTP head, use the one in the main model
+     std::vector<std::string> image;             // path to image file(s) ; TODO: change the name to "media"
+     int image_min_tokens = -1;
+     int image_max_tokens = -1;
+diff --git a/tests/test-model-resolution.cpp b/tests/test-model-resolution.cpp
+index ef1c5a10f..47f6cb64e 100644
+--- a/tests/test-model-resolution.cpp
++++ b/tests/test-model-resolution.cpp
+@@ -400,6 +400,33 @@ static void test_task_assembly() {
+         assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp"}, params);
+         REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/main", "mtp-model-Q8_0.gguf"));
+     }
++    {
++        // --no-mtp-sidecar keeps the MTP head inside the main model
++        common_params params;
++        assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp", "--no-mtp-sidecar"}, params);
++        REQUIRE_EQ(params.model.path, cached("test/main", "model-Q8_0.gguf"));
++        REQUIRE(params.speculative.draft.mparams.path.empty());
++    }
++    {
++        // an explicit --mtp-sidecar keeps the main repo fallback
++        common_params params;
++        assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp", "--mtp-sidecar"}, params);
++        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/main", "mtp-model-Q8_0.gguf"));
++    }
++    {
++        // --no-mtp-sidecar only gates the main repo, an explicit draft repo still resolves
++        common_params params;
++        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/hole:Q4_0", "--spec-type", "draft-mtp", "--no-mtp-sidecar"}, params);
++        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/hole", "mtp-model-Q4_0.gguf"));
++    }
++    {
++        // the env var form disables the same resolution
++        common_params params;
++        common_set_env("LLAMA_ARG_MTP_SIDECAR", "false");
++        assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp"}, params);
++        REQUIRE(params.speculative.draft.mparams.path.empty());
++        common_set_env("LLAMA_ARG_MTP_SIDECAR", "true");
++    }
+     {
+         // -hfd with a spec type wires the draft repo sidecar at its tag,
+         // not its full model, and suppresses the main repo fallback

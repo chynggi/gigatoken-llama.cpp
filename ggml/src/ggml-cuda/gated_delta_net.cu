@@ -420,6 +420,11 @@ static bool launch_gated_delta_net_ilp(
         int64_t sb1,   int64_t sb2, int64_t sb3,
         int64_t neqk1, int64_t rq3,
         float scale, int64_t state_slot_stride, int K, cudaStream_t stream) {
+    // only qualified on NVIDIA Ampere (sm80/sm86)
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (!GGML_CUDA_CC_IS_NVIDIA(cc) || cc < GGML_CUDA_CC_AMPERE || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+        return false;
+    }
     const int  nc       = ggml_cuda_sm86_gdn_cols();
     const bool prefetch = ggml_cuda_sm86_gdn_prefetch();
     if (S_v != 128 || n_tokens < 2 || (nc == 1 && !prefetch)) {

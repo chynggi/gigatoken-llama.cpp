@@ -568,6 +568,9 @@ static constexpr __host__ __device__ int calc_rows_per_block(int ncols_dst, int 
             case 2:
             case 3:
             case 4:
+                // speculative verify widths: 8 rows at nwarps 4 is bit-exact and faster on sm86;
+                // 16 spills IQ4_XS and Q4_K registers
+                return table_id == MMVQ_PARAMETERS_GENERIC ? 8 : 2;
             case 5:
             case 6:
             case 7:

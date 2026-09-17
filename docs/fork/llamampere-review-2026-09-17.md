@@ -31,7 +31,7 @@ stock llama.cpp 대비 1.46x (67.9 → 99.4 tok/s).
 | exact p/q draft 검증 (PQ1) | +7.45% (temp 1) | 없음 | 보류: 충돌 4 파일, 325줄, 모델 검증 필요 |
 | MTP draft vocab shortlist | v0.2 최대 기여 | 없음 | 보류: 모델별 맵 파일, graph/mmvq 충돌 |
 | fused MMA attention q8_0-K/turbo3-V, q8_0/q8_0 | 커널 −27% | **있음** (`fattn-mma-turbo.cuh`, turbo3 타입) | 불가 |
-| MMVQ rows_per_cuda_block 8 (QC4) | +4.88% | 없음 | **이식** |
+| MMVQ rows_per_cuda_block 8 (QC4) | +4.88% | 없음 | **이식** (Q4_K/Q6_K 한정) |
 | SM86 GDN 4 state columns | prefill +3.0..+8.9% | 없음 | **이식** (Ampere 로 gate) |
 | conv snapshot writer bound (RB1) | 0 (정확성) | 없음 | **이식**, 우리 트리에 버그 존재 |
 | rollback reader bound (RB1b) | 0 (정확성) | `gdn_replay` 부분만 | **이식** (rs_valid 만) |
@@ -52,8 +52,8 @@ stock llama.cpp 대비 1.46x (67.9 → 99.4 tok/s).
   유지한다. 누적(compose) 의미는 가져오지 않고 `rs_valid` 상한만 가져왔다.
 - GDN: 원본은 아키텍처 gate 없이 모든 CUDA 호환 장치에서 기본 활성화된다. NVIDIA Ampere
   (cc 800..889) 로 제한했다. `GGML_CUDA_SM86_GDN_COLS=1` 로 끌 수 있다.
-- MMVQ: 이 트리는 GENERIC/GCN/TURING/GB10 이 한 표를 공유한다. GENERIC 만 바꿨다. GENERIC 은
-  Ada/Blackwell 도 쓰므로 그쪽에서는 측정되지 않은 변경이다.
+- MMVQ: 이 트리는 GENERIC/GCN/TURING/GB10 이 한 표를 공유한다. GENERIC 만 바꿨고, 측정 결과에 따라
+  Q4_K / Q6_K 로 한정했다(아래). GENERIC 은 Ada/Blackwell 도 쓰므로 그쪽에서는 측정되지 않은 변경이다.
 
 ## 측정 (RTX 3060 12 GB, CUDA 13.3, MSVC Release)
 
@@ -77,19 +77,27 @@ GDN prefill, `llama-bench` Qwen3.5-9B Q4_K_M, `-fa 1 -r 3`, 2회 반복, `GGML_C
 커널 단위(test-backend-ops perf): head 32 형상 +35..+46%, head 4 형상 −10..−12%. 실제 Qwen3.5/3.6
 GDN 은 value head 32 라 전자에 해당한다.
 
-MTP decode, `llama-server` Qwen3.5-9B Q4_K_M, `--spec-type draft-mtp --spec-draft-n-max 3`, temp 0,
-384 토큰, 프롬프트 3종 × 3회, MMVQ 표 old → new:
+MTP decode, `llama-server`, `--spec-type draft-mtp --spec-draft-n-max 3`, temp 0, 384 토큰,
+프롬프트 3종 × 3회. 각 arm 은 별도 빌드.
 
-| | old | new |
+원본대로 모든 타입에 8 rows 를 준 첫 이식:
+
+| 모델 | old | all-types 8 rows |
 |---|---:|---:|
-| 평균 tok/s | 67.1 | 70.7 (+5.4%) |
-| draft 수락 | 245/414, 248/403, 246/408 | 동일 |
-| 출력 hash | — | 9/9 old 와 동일 (bit-exact) |
+| Qwen3.5-9B Q4_K_M | 67.1 | 70.7 (+5.4%, old → new 한 번) |
+| Qwen3.5-9B IQ4_XS | 76.3 | 74.0 / 73.9 (**−3.0%**, new → old → new) |
 
-측정 순서는 old → new 한 번뿐이다(열 누적은 new 에 불리한 방향). 커널 단위 MUL_MAT perf 는
-run-to-run 편차가 ±10% 라 판단 근거로 쓰지 않았다. 그 안에서도 IQ4_XS 는 n=3 에서 일관되게 느려졌다
-(원본은 IQ4_XS cross-column reuse `485961968` 와 함께 측정됐고, 그 커밋은 이식하지 않았다). IQ4_XS
-모델을 쓸 때는 따로 확인이 필요하다.
+IQ4_XS 가 느려졌다. 원본은 IQ4_XS cross-column reuse(`485961968`)와 함께 측정됐고 그 커밋은 이식하지
+않았다. 그래서 8 rows 를 커널 perf 에서 이득이 보인 Q4_K / Q6_K 로 한정했다(typed). typed → old → typed:
+
+| 모델 | old | typed (1차 / 2차) |
+|---|---:|---:|
+| Qwen3.5-9B Q4_K_M | 67.30 | 70.33 / 71.14 (+4.5% / +5.7%) |
+| Qwen3.5-9B IQ4_XS | 76.27 | 77.02 / 77.22 (+1.0% / +1.2%) |
+
+두 모델 모두 27 회 실행에서 프롬프트별 출력 hash 가 arm 과 무관하게 동일하다(bit-exact). draft 수락도
+동일하다. 커널 단위 MUL_MAT perf 는 run-to-run 편차가 ±10% 라 타입 선별 근거로만 썼다. Q5_0 / Q5_K /
+Q8_0 은 2 rows 를 유지한다.
 
 ## 재검토 조건
 

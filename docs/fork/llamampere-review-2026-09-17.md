@@ -99,7 +99,34 @@ IQ4_XS 가 느려졌다. 원본은 IQ4_XS cross-column reuse(`485961968`)와 함
 동일하다. 커널 단위 MUL_MAT perf 는 run-to-run 편차가 ±10% 라 타입 선별 근거로만 썼다. Q5_0 / Q5_K /
 Q8_0 은 2 rows 를 유지한다.
 
+## 시도 후 버린 것: IQ4_XS cross-column reuse
+
+llamAmpere `485961968` (IQ4_XS activation layout + cross-column weight reuse)와 그 선행 커밋 `84c5764eb`
+(Q4_K/Q5_K `reuse_weights` 경로)를 이식해 봤다. 이 트리의 `halve_iters` 템플릿 인자와 DGX Spark
+prefetch 블록을 유지하는 충돌 해결만 필요했고, 기술적으로는 들어간다.
+
+- 정확성: test-backend-ops MUL_MAT 1297/1297, MUL_MAT_ID 913/913, 모델 크기 IQ4_XS 형상 포함 1369/1369.
+  `GGML_CUDA_SM86_IQ4_REUSE` 0/1 모두 통과. MTP 출력 hash 도 모든 arm 에서 동일.
+- q8_1 버퍼는 호출마다 할당되고 소비자는 MMVQ 뿐이라 IQ4_XS 전용 layout 이 다른 경로로 새지 않는다.
+
+성능 (RTX 3060, Qwen3.5-9B IQ4_XS, 빌드를 `build-artifacts/` 에 보관해 재빌드 없이 교차 실행):
+
+| arm | MTP decode, 3 라운드 교차 | 라운드별 |
+|---|---:|---|
+| 이전 커밋 `10e99096e` | 75.77 | 74.91 / 76.78 / 75.63 |
+| 이식, reuse 끔 | 75.14 | 73.76 / 74.78 / 76.88 |
+| 이식, reuse 켬 (IQ4_XS 2 rows) | 73.94 | 73.61 / 74.66 / 73.54 |
+| 이식, reuse 켬 + IQ4_XS 8 rows (원본 구성) | 75.49 | 75.34 / 79.05 / 72.09 |
+
+arm 간 차이(2% 미만)가 서버 기동 간 편차(최대 ±4%)보다 작다. 4 라운드 교차 커널 perf
+(m/k ∈ {12288, 4096}, n = 1..5)도 대조군 n=1 행이 ±10% 흔들려 일관된 이득이 보이지 않았다.
+측정 중 ComfyUI 가 같은 GPU 를 쓰고 있었다.
+
+q8_1 양자화와 IQ4_XS dot 경로를 바꾸는 변경인데 이득이 확인되지 않아 두 커밋 모두 버렸다.
+
 ## 재검토 조건
 
+- IQ4_XS reuse: GPU 를 단독으로 쓰는 상태에서 교차 측정했을 때 이득이 나오거나, 27B 급(원본 측정 대상)
+  IQ4_XS 모델을 쓸 때.
 - PQ1: 12 GB 에 들어가는 MTP 모델(Qwen3.5-9B MTP 등)로 temp 1 A/B 를 할 수 있을 때.
 - fused MMA: TurboQuant 도입을 다시 검토할 때.

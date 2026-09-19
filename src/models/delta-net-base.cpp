@@ -446,36 +446,6 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     return build_delta_net_chunking(q, k, v, g, b, s, il);
 }
 
-// [TAG_RECURRENT_ROLLBACK_SHIFT] Move the older snapshot groups of the ubatch's sequences back by
-// n_seq_tokens so that group g keeps meaning "the state g tokens behind the head" after a ubatch
-// shorter than the group count K. The op writes only the newest min(n, K) groups (ggml.h,
-// emit_mode 0), so groups [n, K) would otherwise still describe the head BEFORE this ubatch.
-// Group g is plane g of `all`, read through the same s_copy gather as the state itself, so a
-// relocated or seq_cp'd cell reads its source. All gathers are materialized before any write
-// (gather() then write()) because the source planes overlap the destinations.
-static void snapshot_shift_gather(ggml_context * ctx0, ggml_cgraph * gf, const llm_graph_input_rs * inp,
-        ggml_tensor * all, int64_t row_elems, uint32_t mem_size, std::vector<ggml_tensor *> & gathered) {
-    gathered.clear();
-    for (uint32_t j = 0; j < inp->snap_shift; ++j) {
-        const size_t rows_off = (size_t) j * mem_size;
-        GGML_ASSERT(rows_off + mem_size <= (size_t) all->ne[1]);
-        ggml_tensor * planes = ggml_view_2d(ctx0, all, row_elems, all->ne[1] - rows_off, all->nb[1], rows_off * all->nb[1]);
-        ggml_tensor * g = ggml_get_rows(ctx0, planes, inp->s_copy_main);
-        ggml_build_forward_expand(gf, g);
-        gathered.push_back(g);
-    }
-}
-
-static void snapshot_shift_write(ggml_context * ctx0, ggml_cgraph * gf,
-        ggml_tensor * all, int64_t row_elems, int64_t n_seq_tokens, uint32_t kv_head, uint32_t mem_size,
-        const std::vector<ggml_tensor *> & gathered) {
-    for (size_t j = 0; j < gathered.size(); ++j) {
-        const size_t rows_off = ((size_t) n_seq_tokens + j) * mem_size + kv_head;
-        ggml_tensor * dst = ggml_view_2d(ctx0, all, row_elems, gathered[j]->ne[1], all->nb[1], rows_off * all->nb[1]);
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, gathered[j], dst));
-    }
-}
-
 ggml_tensor * llm_build_delta_net_base::build_conv_state(
         llm_graph_input_rs * inp,
         ggml_tensor *        conv_states_all,
@@ -543,10 +513,6 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         // token at a time and makes a later rollback restore a state that never existed.
         const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
 
-        // ... and the older groups move back by n_seq_tokens (no-op when n_seq_tokens >= K)
-        std::vector<ggml_tensor *> older;
-        snapshot_shift_gather(ctx0, gf, inp, conv_states_all, row_count, mem_size, older);
-
         for (int64_t t = K - n_written + 1; t <= K; ++t) {
             const int64_t s_idx  = n_seq_tokens - K + t; // >= 0 by construction
             const int64_t s_slot = K - t;
@@ -565,8 +531,6 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
         }
-
-        snapshot_shift_write(ctx0, gf, conv_states_all, row_count, n_seq_tokens, kv_head, mem_size, older);
     }
 
     return conv_input;
@@ -635,10 +599,6 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     // op writes the last min(n_seq_tokens, K) snapshots; trailing slots are left unwritten
     const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
 
-    // the older groups move back by n_seq_tokens (see snapshot_shift_gather; no-op for n >= K)
-    std::vector<ggml_tensor *> older;
-    snapshot_shift_gather(ctx0, gf, inp, ssm_states_all, hparams.n_embd_s(), mem_size, older);
-
     // write the produced snapshots into the recurrent cache (snapshot slot i -> rollback group i)
     ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
         D, n_seqs, n_written,
@@ -653,8 +613,6 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         (size_t) kv_head * row_size);
 
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
-
-    snapshot_shift_write(ctx0, gf, ssm_states_all, hparams.n_embd_s(), n_seq_tokens, kv_head, mem_size, older);
 
     return output;
 }

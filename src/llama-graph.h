@@ -280,10 +280,6 @@ public:
     // used in view offsets, need to match for valid graph reuse
     uint32_t head;
     int32_t rs_z;
-
-    // [TAG_RECURRENT_ROLLBACK_SHIFT] see llama_memory_recurrent_context::get_snap_shift.
-    // It adds gather/copy nodes to the graph, so it must match for valid reuse too.
-    uint32_t snap_shift = 0;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {

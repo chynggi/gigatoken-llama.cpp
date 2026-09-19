@@ -1338,31 +1338,6 @@ uint32_t llama_memory_recurrent_context::get_size() const {
     return mem->size;
 }
 
-uint32_t llama_memory_recurrent_context::get_snap_shift() const {
-    if (mem->n_rs_seq == 0 || is_full) {
-        return 0;
-    }
-
-    const llama_ubatch & ubatch = get_ubatch();
-
-    const uint32_t K = mem->n_rs_seq + 1;
-    const uint32_t n = ubatch.n_seq_tokens;
-    if (n >= K) {
-        return 0;
-    }
-
-    // the group the logical state lives in is the pending rollback, max over the lanes
-    uint32_t r = 0;
-    for (uint32_t i = 0; i < ubatch.n_seqs_unq; ++i) {
-        const llama_seq_id seq = ubatch.seq_id_unq[i];
-        if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
-            r = std::max(r, mem->rs_idx[seq]);
-        }
-    }
-
-    return K - std::max(n, r);
-}
-
 ggml_tensor * llama_memory_recurrent_context::get_r_l(int32_t il) const {
     return mem->r_l[il];
 }

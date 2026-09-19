@@ -357,7 +357,6 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
 
     res &= head == mctx->get_head();
     res &= rs_z == mctx->get_rs_z();
-    res &= snap_shift == mctx->get_snap_shift();
 
     return res;
 }
@@ -1134,7 +1133,6 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
-    res &= inp_rs->snap_shift == mctx->get_recr()->get_snap_shift();
 
     return res;
 }
@@ -1178,7 +1176,6 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
-    res &= inp_rs->snap_shift == mctx->get_recr()->get_snap_shift();
 
     return res;
 }
@@ -1267,7 +1264,6 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
-    res &= inp_rs->snap_shift == mctx->get_recr()->get_snap_shift();
 
     return res;
 }
@@ -3549,7 +3545,6 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
 
     inp->head = mctx_cur->get_head();
     inp->rs_z = mctx_cur->get_rs_z();
-    inp->snap_shift = mctx_cur->get_snap_shift();
 
     return inp;
 }

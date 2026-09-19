@@ -182,6 +182,14 @@ public:
     int32_t  get_rs_z() const;
     uint32_t get_size() const;
 
+    // [TAG_RECURRENT_ROLLBACK_SHIFT] number of older snapshot groups the builder must move back by
+    // n_seq_tokens for this ubatch: K - max(n_seq_tokens, pending rollback) when n_seq_tokens < K =
+    // n_rs_seq + 1, else 0. The op only rewrites the newest min(n, K) groups, so without the move
+    // group g holds the state g tokens behind the PREVIOUS head after a short ubatch, and a rollback
+    // of exactly one short batch restores a state that never existed.
+    // Always 0 on the speculative verify path (n = n_draft + 1 = K).
+    uint32_t get_snap_shift() const;
+
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
     ggml_tensor * get_p_l(int32_t il) const;

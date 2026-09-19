@@ -2660,7 +2660,8 @@ extern "C" {
     //
     // the output packs the attention scores [S_v, H_v, n_tokens, n_seqs] followed by K state
     // snapshots, most-recent first (slot 0 = final state, slot s = state s tokens back). K == 1
-    // keeps only the final state; when n_tokens < K only slots 0..n_tokens-1 are written.
+    // keeps only the final state; when n_tokens < K only slots 0..n_tokens-1 are written (the
+    // remaining slots are left untouched -- they hold whatever the output buffer contained).
     GGML_API struct ggml_tensor * ggml_gated_delta_net(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,

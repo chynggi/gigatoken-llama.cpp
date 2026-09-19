@@ -90,6 +90,37 @@ static float logit_diff(float a, float b) {
     return std::isfinite(a) && std::isfinite(b) ? std::fabs(a - b) : std::numeric_limits<float>::infinity();
 }
 
+// seq_rm(-1, ...) is the "any sequence" wildcard: the whole range must succeed and leave the
+// context usable, a partial range must be refused. The unsigned seq_id compare used to reject
+// both, and clearing the cells without dropping the tails tripped find_slot on the next decode.
+static bool test_seq_rm_wildcard(const common_params & params, llama_model * model, uint8_t fill) {
+    const std::vector<llama_token> tokens(8, 0);
+
+    llama_context * ctx = make_ctx(params, model, fill);
+    if (ctx == nullptr) {
+        fprintf(stderr, "%s : context init failed\n", __func__);
+        return false;
+    }
+
+    llama_memory_t mem = llama_get_memory(ctx);
+
+    bool ok = decode_tokens(ctx, tokens, (uint32_t) tokens.size());
+    ok = ok && !llama_memory_seq_rm(mem, -1, 1, -1);
+    ok = ok &&  llama_memory_seq_rm(mem, -1, -1, -1);
+    ok = ok && llama_memory_seq_pos_max(mem, 0) == -1;
+    ok = ok && decode_tokens(ctx, tokens, (uint32_t) tokens.size());
+
+    llama_free(ctx);
+
+    if (!ok) {
+        fprintf(stderr, "%s : wildcard seq_rm failed\n", __func__);
+        return false;
+    }
+
+    fprintf(stderr, "%s : wildcard seq_rm clears and the context stays usable\n", __func__);
+    return true;
+}
+
 // Roll back multiple sequences, then replay them in a single batch whose
 // per-seq token count exceeds n_ubatch: each seq's replay spans several
 // ubatches while its rollback restore is still pending. Compared against a
@@ -423,6 +454,10 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     llama_free(ctx_dirty);
 
     if (!test_multi_seq_split_replay(params, model, n_vocab, fill)) {
+        return 1;
+    }
+
+    if (!test_seq_rm_wildcard(params, model, fill)) {
         return 1;
     }
 

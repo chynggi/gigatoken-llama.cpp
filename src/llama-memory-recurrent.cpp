@@ -172,7 +172,9 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
-    if ((uint32_t) seq_id >= this->n_seq_max) {
+    // a negative seq_id is the "match any sequence" wildcard (llama.h), handled by the else-branch
+    // below. Casting it to unsigned here rejected every seq_rm(-1, ...) on recurrent memory.
+    if (seq_id >= 0 && (uint32_t) seq_id >= this->n_seq_max) {
         LLAMA_LOG_ERROR("%s: invalid seq_id (%d) - larger than n_seq_max (%d)\n", __func__, seq_id, this->n_seq_max);
         return false;
     }
@@ -180,7 +182,11 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     const bool rm_all = p0 == 0 && p1 == std::numeric_limits<llama_pos>::max();
     if (rm_all) {
         set_rs_idx(seq_id, 0);
-        rs_valid[seq_id] = 0;
+        if (seq_id < 0) {
+            std::fill(rs_valid.begin(), rs_valid.end(), 0);
+        } else {
+            rs_valid[seq_id] = 0;
+        }
     }
 
     // models like Mamba or RWKV can't have a state partially erased at the end
@@ -220,6 +226,13 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
             //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: `seq_id` is negative, so returning false\n");
             return false;
+        }
+        // the loop below only clears the seq_id sets, so drop the tails with them. A tail left
+        // pointing at an emptied cell trips find_slot's has_seq_id assert on the next decode.
+        if (p0 != p1) {
+            for (uint32_t i = 0; i < size; ++i) {
+                cells[i].tail = -1;
+            }
         }
     }
 
@@ -1323,6 +1336,31 @@ int32_t llama_memory_recurrent_context::get_rs_z() const {
 
 uint32_t llama_memory_recurrent_context::get_size() const {
     return mem->size;
+}
+
+uint32_t llama_memory_recurrent_context::get_snap_shift() const {
+    if (mem->n_rs_seq == 0 || is_full) {
+        return 0;
+    }
+
+    const llama_ubatch & ubatch = get_ubatch();
+
+    const uint32_t K = mem->n_rs_seq + 1;
+    const uint32_t n = ubatch.n_seq_tokens;
+    if (n >= K) {
+        return 0;
+    }
+
+    // the group the logical state lives in is the pending rollback, max over the lanes
+    uint32_t r = 0;
+    for (uint32_t i = 0; i < ubatch.n_seqs_unq; ++i) {
+        const llama_seq_id seq = ubatch.seq_id_unq[i];
+        if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
+            r = std::max(r, mem->rs_idx[seq]);
+        }
+    }
+
+    return K - std::max(n, r);
 }
 
 ggml_tensor * llama_memory_recurrent_context::get_r_l(int32_t il) const {

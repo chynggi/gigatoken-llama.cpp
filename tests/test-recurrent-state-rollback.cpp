@@ -453,15 +453,13 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     llama_free(ctx_dst);
     llama_free(ctx_dirty);
 
-    if (!test_multi_seq_split_replay(params, model, n_vocab, fill)) {
-        return 1;
-    }
+    // independent gates: run them all so one failure does not hide the others
+    int failures = 0;
 
-    if (!test_seq_rm_wildcard(params, model, fill)) {
-        return 1;
-    }
+    failures += test_seq_rm_wildcard(params, model, fill) ? 0 : 1;
+    failures += test_multi_seq_split_replay(params, model, n_vocab, fill) ? 0 : 1;
 
-    return 0;
+    return failures == 0 ? 0 : 1;
 }
 
 int main(int argc, char ** argv) {

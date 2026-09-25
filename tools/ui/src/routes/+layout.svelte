@@ -341,7 +341,7 @@
 
 	<CommandPalette />
 
-	<Toaster richColors />
+	<Toaster closeButton richColors />
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->

@@ -93,6 +93,8 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
+
+    float swiglu_clamp = 0.0f;
     int32_t n_expert_used = 0;
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
@@ -192,6 +194,17 @@ struct clip_hparams {
         image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
         image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
+    }
+
+    // used by longest_edge preprocessor (no model-specific value for min/max tokens)
+    void set_limit_image_tokens() {
+        const int patch_area = patch_size * patch_size * n_merge * n_merge;
+        if (custom_image_min_tokens > 0) {
+            image_min_pixels = custom_image_min_tokens * patch_area;
+        }
+        if (custom_image_max_tokens > 0) {
+            image_max_pixels = custom_image_max_tokens * patch_area;
+        }
     }
 
     void set_warmup_n_tokens(int n_tokens) {

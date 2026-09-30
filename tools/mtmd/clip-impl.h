@@ -651,6 +651,8 @@ struct clip_image_u8 {
     }
 };
 
+struct mtmd_serialization; // forward declaration
+
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
 // For seq, buf.size() == nx*ny*3*nt

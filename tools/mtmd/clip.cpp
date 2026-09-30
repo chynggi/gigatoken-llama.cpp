@@ -759,9 +759,10 @@ ggml_tensor * clip_graph::build_attn(
         ggml_tensor * sinks) const {
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
-    ggml_build_forward_expand(gf, q_cur);
-    ggml_build_forward_expand(gf, k_cur);
-    ggml_build_forward_expand(gf, v_cur);
+    // the order is fixed without the compute flag, so an unselected branch stays out of the compute set
+    ggml_build_forward_order(gf, q_cur);
+    ggml_build_forward_order(gf, k_cur);
+    ggml_build_forward_order(gf, v_cur);
 
     ggml_tensor * q = ggml_permute(ctx0, q_cur, 0, 2, 1, 3);
     //cb(q, "q", il);
@@ -1511,6 +1512,7 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
+                        hparams.set_limit_image_tokens();
                     } break;
                 case PROJECTOR_TYPE_LFM2:
                     {
@@ -1548,6 +1550,7 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.image_longest_edge = hparams.image_size;
                         get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
+                        hparams.set_limit_image_tokens();
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_DOTS_OCR:
@@ -1731,6 +1734,7 @@ struct clip_model_loader {
                         if (hparams.image_longest_edge == 0) {
                             hparams.image_longest_edge = 3024;
                         }
+                        // note: the step3vl preprocessor slices based on a fixed window grid, so it does not support custom min/max image tokens
                         hparams.warmup_image_size = hparams.image_size;
                     } break;
                 case PROJECTOR_TYPE_YOUTUVL:
@@ -2088,6 +2092,9 @@ struct clip_model_loader {
                 }
                 if (hparams.image_max_pixels > 0) {
                     LOG_INF("%s: image_max_pixels:   %d%s\n", __func__, hparams.image_max_pixels, hparams.custom_image_max_tokens > 0 ? " (custom value)" : "");
+                }
+                if (hparams.preproc_max_tiles > 0) {
+                    LOG_INF("%s: preproc_tiles:      %d - %d\n", __func__, hparams.preproc_min_tiles, hparams.preproc_max_tiles);
                 }
             } else if (is_audio) {
                 LOG_INF("\n--- audio hparams ---\n");

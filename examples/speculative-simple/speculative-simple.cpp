@@ -188,15 +188,17 @@ int main(int argc, char ** argv) {
 
             // generate a new draft
             common_speculative_get_draft_params(spec, seq_id) = {
-                /* .drafting   = */ true,
-                /* .n_max      = */ n_draft_max,
-                /* .pos0       = */ n_past,
-                /* .id_last    = */ id_last,
-                /* .prompt     = */ &prompt_tgt,
-                /* .result     = */ &draft, // output
-                /* .dists      = */ &dists,
+                /* .drafting    = */ true,
+                /* .n_max       = */ n_draft_max,
+                /* .pos0        = */ n_past,
+                /* .id_last     = */ id_last,
+                /* .prompt      = */ &prompt_tgt,
+                /* .result      = */ &draft, // output
+                /* .dists       = */ &dists,
                 /* .temperature = */ params.sampling.temp,
-                /* .seed       = */ common_sampler_get_seed(smpl.get()),
+                /* .result_q    = */ nullptr,
+                /* .temp        = */ params.sampling.temp,
+                /* .seed        = */ common_sampler_get_seed(smpl.get()),
             };
             common_speculative_draft(spec);
 

@@ -60,6 +60,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA4,           "gemma4"           },
     { LLM_ARCH_GEMMA4_ASSISTANT, "gemma4-assistant" },
     { LLM_ARCH_GEMMA_EMBEDDING,  "gemma-embedding"  },
+    { LLM_ARCH_GEMMA_EMBEDDING2, "gemma-embedding2" },
     { LLM_ARCH_STARCODER2,       "starcoder2"       },
     { LLM_ARCH_MAMBA,            "mamba"            },
     { LLM_ARCH_MAMBA2,           "mamba2"           },
@@ -279,6 +280,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_SLIDING_WINDOW,               "%s.attention.sliding_window"               },
     { LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,       "%s.attention.sliding_window_pattern"       },
     { LLM_KV_ATTENTION_ROPE_PATTERN,                 "%s.attention.rope_pattern"                 },
+    { LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,           "%s.attention.value_expert_count"           },
+    { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,      "%s.attention.value_expert_used_count"      },
 
     { LLM_KV_ATTENTION_SCALE,                        "%s.attention.scale"                        },
     { LLM_KV_ATTENTION_OUTPUT_SCALE,                 "%s.attention.output_scale"                 },
@@ -328,6 +331,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ROPE_DIMENSION_COUNT,           "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_COUNT_SWA,       "%s.rope.dimension_count_swa"             },
     { LLM_KV_ROPE_DIMENSION_SECTIONS,        "%s.rope.dimension_sections"              },
+    { LLM_KV_ROPE_SECTION_ORDER,             "%s.rope.section_order"                   },
     { LLM_KV_ROPE_FREQ_BASE,                 "%s.rope.freq_base"                       },
     { LLM_KV_ROPE_FREQ_BASE_SWA,             "%s.rope.freq_base_swa"                   },
     { LLM_KV_ROPE_SCALE_LINEAR,              "%s.rope.scale_linear"                    },
@@ -368,6 +372,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_CLASSIFIER_OUTPUT_LABELS, "%s.classifier.output_labels" },
     { LLM_KV_CLASSIFIER_POOLING_TYPE,  "%s.classifier.pooling_type"  },
+    { LLM_KV_CLASSIFIER_ACTIVATION,    "%s.classifier.activation"    },
 
     { LLM_KV_DECISION_BLOCK_COUNT,         "%s.decision.block_count"         },
     { LLM_KV_DECISION_ROUTING_BLOCK_COUNT, "%s.decision.routing_block_count" },
@@ -443,6 +448,17 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_XIELU_BETA,            "xielu.beta"            },
     { LLM_KV_XIELU_EPS,             "xielu.eps"             },
 
+    { LLM_KV_PRISM_HADAMARD_VERSION,              "prism.hadamard.version"              },
+    { LLM_KV_PRISM_HADAMARD_TIED_OUTPUT,          "prism.hadamard.tied_output"          },
+    { LLM_KV_PRISM_HADAMARD_BLOCK_SIZE,           "prism.hadamard.block_size"           },
+    { LLM_KV_PRISM_HADAMARD_TRANSFORM,            "prism.hadamard.transform"            },
+    { LLM_KV_PRISM_HADAMARD_AXIS,                 "prism.hadamard.axis"                 },
+    { LLM_KV_PRISM_HADAMARD_SIGN_MODE,            "prism.hadamard.sign_mode"            },
+    { LLM_KV_PRISM_HADAMARD_SIGN_WIDTHS,          "prism.hadamard.sign_widths"          },
+    { LLM_KV_PRISM_HADAMARD_SIGN_VALUES,          "prism.hadamard.sign_values"          },
+    { LLM_KV_PRISM_HADAMARD_WEIGHT_NAMES,         "prism.hadamard.weight_names"         },
+    { LLM_KV_PRISM_HADAMARD_INVERSE_WEIGHT_NAMES, "prism.hadamard.inverse_weight_names" },
+    { LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED,        "prism.hadamard.gdn_v_grouped"        },
     // K2 Horizon MoVA
     { LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,          "%s.attention.value_expert_count"},
     { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,     "%s.attention.value_expert_used_count"},
@@ -748,8 +764,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_DFLASH_SELECTOR_NEXT,                   "selector_successor" },
     { LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,                 "selector_hidden" },
     { LLM_TENSOR_ENC_AUX_NORM,                           "enc.aux_norm" },
-    { LLM_TENSOR_ATTN_V_GATE,                            "blk.%d.attn_v_gate"},
-    { LLM_TENSOR_ATTN_V_EXPS,                            "blk.%d.attn_v_exps"},
+    { LLM_TENSOR_ATTN_V_GATE,                            "blk.%d.attn_v_gate" },
+    { LLM_TENSOR_ATTN_V_EXPS,                            "blk.%d.attn_v_exps" },
 };
 
 // declare information about the model weight tensors:

@@ -3,7 +3,6 @@ import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
-import { FORK_DISPLAY_SETTINGS, FORK_SETTINGS_REGISTRY } from '$lib/fork/settings/fork-sections';
 import {
 	Code,
 	Database,
@@ -124,6 +123,15 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				isExperimental: true,
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 				label: 'Enable "Continue" button',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				// Deliberately off for now: the natural place to turn it on is the first
+				// run experience, once onboarding exists to ask the user about it.
+				defaultValue: false,
+				help: 'Fetch model metadata (avatars, context length, chat template) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models and hides the org avatars.',
+				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
+				label: 'Use Hugging Face Hub API for models metadata',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -285,9 +293,16 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Display the organization name in the model selector trigger button.',
-				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER,
-				label: 'Show organization name in model selector trigger',
+				help: 'Show the modality and capability icons (vision, audio, reasoning, tools) on the models selector rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_CAPABILITIES_IN_SELECTOR,
+				label: 'Show model modalities & capabilities in models selector',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Display the organization name alongside model names in the model selector, in the trigger and in the model rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME,
+				label: 'Show organization name in model selector',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -304,7 +319,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				label: 'Show full path in mentions',
 				type: SettingsFieldType.CHECKBOX
 			},
-			...FORK_DISPLAY_SETTINGS
+			{
+				defaultValue: true,
+				help: 'Group models into families (e.g. "Qwen") in the model picker and the models manager. Turn it off to list every model on its own.',
+				key: SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY,
+				label: 'Group models by family',
+				type: SettingsFieldType.CHECKBOX
+			}
 		],
 		slug: SETTINGS_SECTION_SLUGS.DISPLAY,
 		title: SETTINGS_SECTION_TITLES.DISPLAY
@@ -637,8 +658,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		],
 		slug: SETTINGS_SECTION_SLUGS.DEVELOPER,
 		title: SETTINGS_SECTION_TITLES.DEVELOPER
-	},
-	...Object.values(FORK_SETTINGS_REGISTRY)
+	}
 ];
 
 function getAllSettings(): SettingsEntry[] {

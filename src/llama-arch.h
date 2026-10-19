@@ -872,6 +872,10 @@ struct LLM_TN {
 struct llm_tensor_info {
     llm_tensor_layer layer;
     ggml_op op;
+    // the graph may use the weight with a non-contiguous src1: MLA attn_k_b (permuted q_nope view) and attn_v_b (permuted attention output
+    // on the flash-attention path; contiguous without FA). the loader probes with such a src1, so a buffer type that rejects it is skipped
+    // (CPU AMX; CANN, OpenCL and ET for some weight types)
+    bool src1_noncont = false;
 };
 
 std::vector<llm_arch> llm_arch_all();

@@ -1412,7 +1412,9 @@ void llm_graph_result::reset() {
     fused_nodes.clear();
     hdmd_inputs.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    // + room for the graph-key work buffer of set_graph_key()
+    buf_compute_meta.resize(ggml_tensor_overhead()*(max_nodes + 1) + ggml_graph_overhead_custom(max_nodes, false) +
+                            (size_t) GRAPH_KEY_MAX*GGML_MEM_ALIGN);
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
@@ -1423,6 +1425,12 @@ void llm_graph_result::reset() {
     ctx_compute.reset(ggml_init(params));
 
     gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
+}
+
+void llm_graph_result::set_graph_key(uint32_t key) {
+    // ggml-cuda keys CUDA graphs by the first node's address; a key-sized work buffer before the first node gives each
+    // key its own address, so ggml-cuda keeps one instance per key instead of updating one in place (cudaGraphExecUpdate)
+    ggml_new_buffer(ctx_compute.get(), (size_t) (key % GRAPH_KEY_MAX)*GGML_MEM_ALIGN);
 }
 
 void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {

@@ -1532,6 +1532,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     } else {
         gf_res_prev_active = nullptr;
         res->reset();
+        // one CUDA graph per ubatch shape: the token count, and whether every token is an output (all for a speculative
+        // verify, one for a prompt); ubatches with the same token count and a partial output count share a key
+        res->set_graph_key(2*ubatch.n_tokens + (n_outputs == ubatch.n_tokens ? 1 : 0));
 
         ggml_backend_sched_reset(sched.get());
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);

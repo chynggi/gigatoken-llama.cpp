@@ -936,6 +936,12 @@ public:
 
     void reset();
 
+    // call right after reset(), before the graph is built: graphs with different keys get different node addresses
+    void set_graph_key(uint32_t key);
+
+    // distinct keys up to n_ubatch 2048 (key = 2*n_tokens + 1); costs GRAPH_KEY_MAX*GGML_MEM_ALIGN bytes of meta buffer
+    static constexpr uint32_t GRAPH_KEY_MAX = 4096;
+
     void set_inputs(const llama_ubatch * ubatch);
     void set_outputs(const llm_graph_params & params);
 

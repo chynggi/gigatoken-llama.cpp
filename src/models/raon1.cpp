@@ -64,6 +64,9 @@ void llama_model_raon1::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error(format("unsupported Raon-1 RDA head dimension %u (16, 32, 64 or 128)", hparams.n_embd_head_kda));
     }
 
+    // the extracted layer inputs are the full mHC residual: hc streams of n_embd each
+    hparams.n_embd_layer_inp_impl = hparams.dsv4_hc_mult * hparams.n_embd;
+
     switch (hparams.n_layer()) {
         case 25: type = LLM_TYPE_29B_A4B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -443,6 +446,9 @@ llama_model_raon1::graph::graph(const llama_model & model, const llm_graph_param
     GGML_ASSERT(ubatch.n_tokens == ubatch.n_seq_tokens*ubatch.n_seqs);
 
     for (int il = 0; il < n_layer; ++il) {
+        // [n_embd, hc, n_tokens]: the output of layer il-1 after its MLP hc_post, stream-major per token
+        res->t_layer_inp[il] = inp;
+
         const auto & layer = model.layers[il];
         ggml_tensor * post;
         ggml_tensor * comb;
@@ -480,6 +486,8 @@ llama_model_raon1::graph::graph(const llama_model & model, const llm_graph_param
         inp = build_cvec(inp, il);
         cb(inp, "l_out", il);
     }
+    res->t_layer_inp[n_layer] = inp;
+
     ggml_tensor * cur = nullptr;
     for (int64_t i = 0; i < hc; ++i) {
         ggml_tensor * x = ggml_view_2d(ctx0, inp, n_embd, n_tokens, inp->nb[2], i*inp->nb[1]);

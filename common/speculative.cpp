@@ -9,6 +9,7 @@
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
+#include "speculative-internal.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 
@@ -29,6 +30,8 @@
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+// mixed into a fixed user seed so that a draft-side random stream differs from the target sampler's
+#define SPEC_DRAFT_SEED_MIX             0x85ebca6bu
 
 // Rebuild seq_id's draft sampler at the target's temperature: rejection weighs q against p, so
 // both have to sample alike. Only temp and seed carry over; the draft keeps its own top_k.
@@ -63,7 +66,7 @@ static void spec_retune(
     sparams.top_k    = 10;
     sparams.temp     = cur.temp;
     // must be explicit, the default reseeds at random; mixed so it differs from the target's
-    sparams.seed     = cur.seed == LLAMA_DEFAULT_SEED ? cur.seed : cur.seed ^ 0x85ebca6bu;
+    sparams.seed     = cur.seed == LLAMA_DEFAULT_SEED ? cur.seed : cur.seed ^ SPEC_DRAFT_SEED_MIX;
     sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE };
 
     smpls[seq_id].reset(common_sampler_init(model, sparams));
@@ -990,6 +993,114 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     }
 };
 
+void common_speculative_selector_walk(
+        const float * lattice,
+        size_t row_stride,
+        int32_t n_steps,
+        int32_t top_k,
+        float temp,
+        float p_min,
+        std::mt19937 * rng,
+        llama_tokens & result,
+        std::vector<std::vector<llama_token_data>> * result_q) {
+    const bool sample = rng && temp > 0.0f;
+
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+
+    std::vector<float> probs(top_k);
+
+    int32_t predecessor = 0;
+    for (int32_t i = 0; i < n_steps; ++i) {
+        const float * row    = lattice + (size_t) i * row_stride;
+        const float * scores = row + top_k + (size_t) predecessor * top_k;
+
+        if (!sample) {
+            predecessor = (int32_t) std::distance(scores, std::max_element(scores, scores + top_k));
+            if (scores[predecessor] == -INFINITY) {
+                break;
+            }
+            if (p_min > 0.0f) {
+                // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
+                float sum = 0.0f;
+                for (int32_t k = 0; k < top_k; ++k) {
+                    sum += std::exp(scores[k] - scores[predecessor]);
+                }
+                if (1.0f / sum < p_min) {
+                    break;
+                }
+            }
+            result.push_back((llama_token) row[predecessor]);
+            continue;
+        }
+
+        // the distribution vLLM samples and caches as the draft logits: softmax(scores/temp) over the candidates
+        // (shift before dividing, so that a tiny temp tends to one-hot instead of overflowing)
+        float s_max = -INFINITY;
+        for (int32_t k = 0; k < top_k; ++k) {
+            s_max = std::max(s_max, scores[k]);
+        }
+        if (s_max == -INFINITY) {
+            break;
+        }
+        float sum = 0.0f;
+        for (int32_t k = 0; k < top_k; ++k) {
+            probs[k] = std::exp((scores[k] - s_max) / temp);
+            sum += probs[k];
+        }
+        float p_max = 0.0f;
+        for (int32_t k = 0; k < top_k; ++k) {
+            probs[k] /= sum;
+            p_max = std::max(p_max, probs[k]);
+        }
+
+        if (p_max < p_min) {
+            break;
+        }
+
+        // draw from the same probabilities that go into q, so rejection weighs exactly what was sampled
+        float u = uni(*rng);
+        int32_t next = top_k - 1;
+        for (int32_t k = 0; k < top_k; ++k) {
+            u -= probs[k];
+            if (u < 0.0f) {
+                next = k;
+                break;
+            }
+        }
+        // rounding can leave u >= 0 past the last candidate; fall back to the last one with mass
+        while (next > 0 && probs[next] <= 0.0f) {
+            --next;
+        }
+        predecessor = next;
+
+        result.push_back((llama_token) row[predecessor]);
+
+        if (result_q) {
+            auto & q = result_q->emplace_back(top_k);
+            for (int32_t k = 0; k < top_k; ++k) {
+                q[k] = { (llama_token) row[k], scores[k], probs[k] };
+            }
+        }
+    }
+}
+
+void common_speculative_walk_rng::begin() {
+    if (seed != LLAMA_DEFAULT_SEED) {
+        rng.seed(std::random_device{}());
+        seed = LLAMA_DEFAULT_SEED;
+    }
+}
+
+// mixed like spec_retune so the walk stream differs from the target sampler's
+void common_speculative_walk_rng::reseed(uint32_t new_seed) {
+    if (seed == new_seed) {
+        return;
+    }
+
+    seed = new_seed;
+    rng.seed(seed == LLAMA_DEFAULT_SEED ? std::random_device{}() : seed ^ SPEC_DRAFT_SEED_MIX);
+}
+
 // DFlash: block-diffusion drafting with a draft-side KV cache injection
 struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     common_params_speculative_draft params;
@@ -1000,6 +1111,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<float> features_buf; // [n_chunk, n_embd_enc] gathered target features
 
     std::vector<common_sampler_ptr> smpls;
+
+    // DFlash2 probabilistic walk: per-seq rng and the target seed it was derived from
+    std::vector<common_speculative_walk_rng> walk_rngs;
 
     // backend sampler chain per seq, attached to ctx_dft
     std::vector<llama_sampler *> backend_chains;
@@ -1129,6 +1243,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             s.reset(common_sampler_init(model_dft, sparams));
         }
 
+        walk_rngs.resize(n_seq);
+
         // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
         if (this->params.backend_sampling && !is_dflash2 && !is_lilicorr) {
@@ -1173,6 +1289,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
+
+        // a new request with a fixed seed restarts the walk stream, so its output is reproducible;
+        // one without a seed gets a random stream even if the previous request had a fixed seed
+        walk_rngs[seq_id].begin();
 
         const int32_t N = (int32_t) prompt.size();
         if (N <= 0) {
@@ -1350,33 +1470,28 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             auto & result = *dp.result;
 
             if (is_dflash2 || is_lilicorr) {
-                // Both DFlash and LiliCorr greedily walk the candidate lattice.
+                // LiliCorr walks the candidate lattice greedily, DFlash2 samples it when the target verifies by rejection
                 const float * lattice = llama_get_embeddings_nextn(ctx_dft);
                 GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
 
-                int32_t predecessor = 0;
-                for (int32_t i = 1; i < (is_dflash2 ? n_block_tokens : params.n_max + 1); ++i) {
-                    const float * row = lattice + (size_t) (beg + i) * n_embd_dec;
-                    const int32_t top_k = is_dflash2 ? selector_top_k : lilicorr_top_k;
-                    const float * scores = row + top_k + (size_t) predecessor * top_k;
-
-                    predecessor = (int32_t) std::distance(scores,
-                            std::max_element(scores, scores + top_k));
-                    if (params.p_min > 0.0f) {
-                        // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
-                        float sum = 0.0f;
-                        for (int32_t k = 0; k < top_k; ++k) {
-                            sum += std::exp(scores[k] - scores[predecessor]);
-                        }
-                        if (1.0f / sum < params.p_min) {
-                            break;
-                        }
-                    }
-                    result.push_back((llama_token) row[predecessor]);
+                const bool sample = is_dflash2 && params.probabilistic && dp.result_q && dp.temp > 0.0f;
+                if (sample) {
+                    walk_rngs[seq_id].reseed(dp.seed);
                 }
+
+                common_speculative_selector_walk(
+                        lattice + (size_t) (beg + 1) * n_embd_dec, n_embd_dec,
+                        is_dflash2 ? n_block_tokens - 1 : params.n_max,
+                        is_dflash2 ? selector_top_k : lilicorr_top_k,
+                        sample ? dp.temp : 0.0f, params.p_min,
+                        sample ? &walk_rngs[seq_id].rng : nullptr,
+                        result, sample ? dp.result_q : nullptr);
 
                 if (result.size() < (size_t) params.n_min) {
                     result.clear();
+                    if (sample) {
+                        dp.result_q->clear();
+                    }
                 }
                 continue;
             }
@@ -2934,6 +3049,21 @@ bool common_speculative_process(common_speculative * spec, const common_batch & 
     return result;
 }
 
+void common_speculative_draft_truncate(llama_tokens & result, std::vector<std::vector<llama_token_data>> * result_q,
+        int32_t n_max) {
+    if (n_max > 0) {
+        if (!result.empty() && (int) result.size() > n_max) {
+            SPC_DBG("truncating draft to %d tokens\n", n_max);
+            result.resize(n_max);
+
+            // trim the candidates only if the drafter produced them (n-gram drafters do not)
+            if (result_q && !result_q->empty()) {
+                result_q->resize(n_max);
+            }
+        }
+    }
+}
+
 void common_speculative_draft(common_speculative * spec) {
     if (spec == nullptr) {
         return;
@@ -2979,17 +3109,7 @@ void common_speculative_draft(common_speculative * spec) {
             if (dp.drafting && !result.empty()) {
                 dp.drafting = false;
 
-                if (dp.n_max > 0) {
-                    if (!result.empty() && (int) result.size() > dp.n_max) {
-                        SPC_DBG("truncating draft to %d tokens\n", dp.n_max);
-                        result.resize(dp.n_max);
-
-                        // trim the candidates only if the drafter produced them (n-gram drafters do not)
-                        if (dp.result_q && !dp.result_q->empty()) {
-                            dp.result_q->resize(dp.n_max);
-                        }
-                    }
-                }
+                common_speculative_draft_truncate(result, dp.result_q, dp.n_max);
 
                 if (!result.empty()) {
                     SPC_DBG("called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n",

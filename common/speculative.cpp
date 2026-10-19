@@ -566,7 +566,19 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         n_embd_tgt = llama_model_n_embd_layer_inp(model_tgt);
         n_embd_dec = llama_model_n_embd(model_dft);
         n_embd_enc = (int32_t) target_layer_ids_n * n_embd_tgt;
+        if (n_embd_enc != llama_model_n_embd_inp_enc(model_dft)) {
+            throw std::runtime_error("EAGLE3 draft expects " + std::to_string(llama_model_n_embd_inp_enc(model_dft)) +
+                    " target features per token, but the target exports " + std::to_string(target_layer_ids_n) + " x " +
+                    std::to_string(n_embd_tgt) + " (incompatible draft/target pair)");
+        }
         n_layer_tgt = llama_model_n_layer(model_tgt);
+        for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+            // a tap past the last layer reads the nextn embeddings, which are n_embd_out wide
+            if (target_layer_ids[k] >= n_layer_tgt && llama_model_n_embd_out(model_tgt) != n_embd_tgt) {
+                throw std::runtime_error("EAGLE3: the target's nextn embeddings are " + std::to_string(llama_model_n_embd_out(model_tgt)) +
+                        " wide, but its layer inputs are " + std::to_string(n_embd_tgt) + " (incompatible draft/target pair)");
+            }
+        }
 
         batch     = common_batch(ctx_dft);
         batch_enc = common_batch(ctx_dft);
@@ -1041,6 +1053,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         n_embd_tgt    = llama_model_n_embd_layer_inp(model_tgt);
         n_embd_dec    = llama_model_n_embd(model_dft);
         n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
+        if (n_embd_enc != llama_model_n_embd_inp_enc(model_dft)) {
+            throw std::runtime_error("DFlash draft expects " + std::to_string(llama_model_n_embd_inp_enc(model_dft)) +
+                    " target features per token, but the target exports " + std::to_string(target_layer_ids_n) + " x " +
+                    std::to_string(n_embd_tgt) + " (incompatible draft/target pair)");
+        }
 
         // read the trained block size from the dflash.block_size metadata key
         block_size = 16;

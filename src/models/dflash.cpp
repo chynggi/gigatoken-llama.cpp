@@ -51,7 +51,14 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
     }
 
-    hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
+    // per-tap width of the target features, as for EAGLE3: n_embd by default, n_streams*n_embd for a hyper-connection target
+    uint32_t n_embd_tgt = hparams.n_embd;
+    ml.get_key(LLM_KV_TARGET_HIDDEN_SIZE, n_embd_tgt, false);
+    if (n_embd_tgt == 0) {
+        throw std::runtime_error("DFlash 'target_hidden_size' must be positive");
+    }
+
+    hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * n_embd_tgt;
 
     std::string layers;
     const char * sep = "";
@@ -60,7 +67,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         layers += std::to_string(id);
         sep = ", ";
     }
-    LLAMA_LOG_INFO("%s: DFlash extract_layers = [%s]\n", __func__, layers.c_str());
+    LLAMA_LOG_INFO("%s: DFlash extract_layers = [%s], n_embd_tgt = %u\n", __func__, layers.c_str(), n_embd_tgt);
 
     // DeepSeek-V4 DSpark backbone: stages are full DSV4 blocks, uniform sliding window (the draft KV ring)
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.dsv4_hc_mult, false);

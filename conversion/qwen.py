@@ -830,6 +830,27 @@ class DFlashModel(Qwen3Model):
             extract_layer_ids = [i + 1 for i in target_layer_ids]
             self.gguf_writer.add_target_layers(extract_layer_ids)
 
+        # per-tap feature width, as for EAGLE3 (and vLLM: fc input = target_hidden_size x taps)
+        # hyper-connection targets feed every residual stream of a tap, tap-major then stream-major
+        hidden_size = self.hparams["hidden_size"]
+        stream_size = int(dflash_config.get("target_embedding_size", hidden_size))
+        n_streams = dflash_config.get("target_streams_per_layer")
+        if n_streams is not None and int(n_streams) < 1:
+            raise ValueError(f"target_streams_per_layer must be at least 1, got {n_streams}")
+        target_hidden_size = self.hparams.get("target_hidden_size")
+        if target_hidden_size is not None and n_streams is not None and int(target_hidden_size) != int(n_streams) * stream_size:
+            raise ValueError(f"target_hidden_size {target_hidden_size} does not match target_streams_per_layer {n_streams} "
+                             f"x target stream width {stream_size}")
+        if target_hidden_size is None:
+            target_hidden_size = int(n_streams or 1) * stream_size
+        target_hidden_size = int(target_hidden_size)
+        if (feature_size := dflash_config.get("target_feature_size")) is not None and target_layer_ids:
+            if int(feature_size) != len(target_layer_ids) * target_hidden_size:
+                raise ValueError(f"target_feature_size {feature_size} != {len(target_layer_ids)} layers x "
+                                 f"target_hidden_size {target_hidden_size}")
+        if target_hidden_size != hidden_size:
+            self.gguf_writer.add_target_hidden_size(target_hidden_size)
+
         use_sliding_window = self.hparams.get("use_sliding_window", False) or dflash_config.get("use_swa", False)
         sliding_window = dflash_config.get("swa_window_size") or self.hparams.get("sliding_window")
         layer_types = self.hparams.get("layer_types")

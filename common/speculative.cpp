@@ -522,8 +522,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     std::vector<llama_sampler *> backend_chains;
 
     int32_t n_embd_dec = 0;       // draft hidden size
-    int32_t n_embd_enc = 0;       // target_layer_ids_n * target_hidden_size
-    int32_t n_embd_tgt = 0;       // target model hidden size
+    int32_t n_embd_enc = 0;       // target_layer_ids_n * n_embd_tgt
+    int32_t n_embd_tgt = 0;       // per-token width of one extracted target layer
     int32_t n_layer_tgt = 0;      // target model layer count
 
     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
@@ -563,7 +563,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                                      std::to_string(target_layer_ids_n) + ")");
         }
 
-        n_embd_tgt = llama_model_n_embd(model_tgt);
+        n_embd_tgt = llama_model_n_embd_layer_inp(model_tgt);
         n_embd_dec = llama_model_n_embd(model_dft);
         n_embd_enc = (int32_t) target_layer_ids_n * n_embd_tgt;
         n_layer_tgt = llama_model_n_layer(model_tgt);
@@ -993,8 +993,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<llama_sampler *> backend_chains;
 
     int32_t n_embd_dec = 0;  // draft hidden size
-    int32_t n_embd_enc = 0;  // target_layer_ids_n * target_hidden_size
-    int32_t n_embd_tgt = 0;  // target model hidden size
+    int32_t n_embd_enc = 0;  // target_layer_ids_n * n_embd_tgt
+    int32_t n_embd_tgt = 0;  // per-token width of one extracted target layer
 
     int32_t     block_size    = 0;
     llama_token mask_token_id = 0;
@@ -1038,7 +1038,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
         GGML_ASSERT(target_layer_ids_n > 0 && "DFlash model has no target_layer_ids");
 
-        n_embd_tgt    = llama_model_n_embd(model_tgt);
+        n_embd_tgt    = llama_model_n_embd_layer_inp(model_tgt);
         n_embd_dec    = llama_model_n_embd(model_dft);
         n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
 

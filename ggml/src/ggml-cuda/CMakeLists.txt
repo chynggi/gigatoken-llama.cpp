@@ -254,6 +254,8 @@ if (CUDAToolkit_FOUND)
         # CCCL 3.2 onwards will require a cpp-standard-compliant preprocessor for MSVC
         # https://github.com/NVIDIA/cccl/pull/6827
         list(APPEND CUDA_CXX_FLAGS /Zc:preprocessor)
+        # match the C/CXX /utf-8 option, otherwise non-UTF-8 code pages flood the log with C4819
+        list(APPEND CUDA_CXX_FLAGS /utf-8)
     endif()
 
     list(JOIN   CUDA_CXX_FLAGS " " CUDA_CXX_FLAGS_JOINED)  # pass host compiler flags as a single argument

@@ -454,8 +454,6 @@ const ggml_cuda_device_info & ggml_cuda_info() {
 
 // #define DEBUG_CUDA_MALLOC
 
-static std::atomic<uint64_t> ggml_cuda_pool_flush_counter{0};
-
 // buffer pool for cuda (legacy)
 struct ggml_cuda_pool_leg : public ggml_cuda_pool {
     static const int MAX_BUFFERS = 256;
@@ -481,8 +479,6 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
     }
 
     void clear_pool() {
-        bool flushed = false;
-
         ggml_cuda_set_device(device);
         for (int i = 0; i < MAX_BUFFERS; ++i) {
             ggml_cuda_buffer & b = buffer_pool[i];
@@ -491,12 +487,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                 pool_size -= b.size;
                 b.ptr  = nullptr;
                 b.size = 0;
-                flushed = true;
             }
-        }
-
-        if (flushed) {
-            ggml_cuda_pool_flush_counter.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
@@ -593,7 +584,6 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         ggml_cuda_set_device(device);
         CUDA_CHECK(cudaFree(ptr));
         pool_size -= size;
-        ggml_cuda_pool_flush_counter.fetch_add(1, std::memory_order_relaxed);
         invalidate_cuda_graphs();
     }
 };
@@ -2778,22 +2768,6 @@ static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
 
-// pool scratch is not a tensor, so ggml_cuda_graph_update_required cannot see it
-// UINT64_MAX means the graph has captured nothing yet, so nothing can be stale
-static bool ggml_cuda_graph_pool_flushed(ggml_cuda_graph * graph) {
-    const uint64_t count = ggml_cuda_pool_flush_counter.load(std::memory_order_relaxed);
-
-    const bool flushed = graph->pool_flush_count != UINT64_MAX && graph->pool_flush_count != count;
-
-    graph->pool_flush_count = count;
-
-    if (flushed) {
-        GGML_LOG_DEBUG("%s: memory pool flushed, CUDA graph must be captured again\n", __func__);
-    }
-
-    return flushed;
-}
-
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
     bool res = false;
 
@@ -4860,8 +4834,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (graph->is_enabled()) {
         const bool graph_compatible = ggml_cuda_graph_check_compability(cgraph);
         if (graph_compatible) {
-            const bool properties_changed = ggml_cuda_graph_update_required(cuda_ctx, cgraph) ||
-                                            ggml_cuda_graph_pool_flushed(graph);
+            const bool properties_changed = ggml_cuda_graph_update_required(cuda_ctx, cgraph);
 
             if (!graph->warmup_complete) {
                 // Warmup: need at least 2 calls with no property change on the 2nd call

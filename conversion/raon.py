@@ -14,6 +14,15 @@ def _with_default(config: dict[str, Any], key: str, default: Any) -> Any:
     return default if value is None else value
 
 
+def _dequant_mxfp8(weight: Tensor, scale: Tensor) -> Tensor:
+    # E4M3 [N, K] with one E8M0 byte per 1x32 block [N, K/32]: value * 2**(byte - 127),
+    # the fp32 product of dequantize_mxfp8 in the HF modeling code, so the result is exact
+    # a float8_e8m0fnu scale already decodes to the same power of two
+    factor = torch.exp2(scale.float() - 127) if scale.dtype == torch.uint8 else scale.float()
+    rows, cols = weight.shape
+    return (weight.float().reshape(rows, cols // 32, 32) * factor.unsqueeze(-1)).reshape(rows, cols)
+
+
 @ModelBase.register("Raon1MiniForCausalLM")
 @ModelBase.example("KRAFTON/Raon-1-mini-preview")
 class Raon1Model(TextModel):
@@ -31,7 +40,7 @@ class Raon1Model(TextModel):
         super().__init__(*args, **kwargs)
         self._experts: dict[tuple[int, str], dict[int, Tensor]] = {}
         self._mhc: dict[tuple[int, str], dict[str, Tensor]] = {}
-        self._rda_layers = set(self.hparams["linear_attn_config"]["rda_layers"])
+        self._rda_layers = set(self.hparams["rda_config"]["rda_layers"])
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
@@ -45,37 +54,53 @@ class Raon1Model(TextModel):
                 del tensors[name]
         return tensors
 
+    def dequant_model(self):
+        # the release stores the routed experts as MXFP8 (quant_method "mxfp8", weight + weight_scale_inv);
+        # every other tensor is in quantization_config.ignored_layers and stays BF16
+        quant_config = self.hparams.get("quantization_config") or {}
+        if quant_config.get("quant_method") != "mxfp8":
+            return super().dequant_model()
+        if list(quant_config.get("weight_block_size") or [1, 32]) != [1, 32]:
+            raise ValueError(f"Raon-1 MXFP8 needs weight_block_size [1, 32], got {quant_config['weight_block_size']}")
+        for name in [name for name in self.model_tensors if name.endswith(".weight_scale_inv")]:
+            weight_name = name.removesuffix("_scale_inv")
+            if ".moe.experts." not in weight_name:
+                raise ValueError(f"Unexpected MXFP8 tensor {weight_name}: only the routed experts are quantized")
+            weight, scale = self.model_tensors[weight_name], self.model_tensors.pop(name)
+            self.model_tensors[weight_name] = lambda w=weight, s=scale: _dequant_mxfp8(w(), s())
+
     def set_gguf_parameters(self):
         hp = self.hparams
-        linear = hp["linear_attn_config"]
+        rda_config = hp["rda_config"]
         n_layer = hp["num_hidden_layers"]
+        # 1-based layer ids, as in the HF config (is_rda_layer: layer_idx + 1 in rda_layers)
         rda = self._rda_layers
-        mla = set(linear["full_attn_layers"])
+        mla = set(rda_config["mla_layers"])
         if rda & mla or rda | mla != set(range(1, n_layer + 1)):
             raise ValueError("Raon-1 attention layer lists must partition all layers")
         # the hybrid memory needs both layer kinds
         if not rda or not mla:
-            raise ValueError("Raon-1 needs at least one RDA (rda_layers) and one MLA (full_attn_layers) layer")
+            raise ValueError("Raon-1 needs at least one RDA (rda_layers) and one MLA (mla_layers) layer")
         if hp.get("tie_word_embeddings"):
             raise ValueError("Raon-1 with tie_word_embeddings is not supported (the released model has a separate lm_head)")
         if (not hp["mla_use_nope"] or not hp["mla_use_output_gate"]
-                or not linear["use_full_rank_gate"] or hp["hidden_act"] != "situ"
+                or not rda_config["full_rank_gate"] or hp["hidden_act"] != "situ"
                 or hp["moe_router_activation_func"] != "sigmoid"
                 or hp.get("use_grouped_topk") or hp.get("routed_expert_hidden_size")
                 or hp.get("attn_res_block_size") or hp["moe_layer_freq"] != 1):
             raise ValueError("Unsupported Raon-1 architecture variant")
-        if linear["num_heads"] != hp["num_attention_heads"]:
+        if rda_config["num_heads"] != hp["num_attention_heads"]:
             raise ValueError("Raon-1 RDA and MLA head counts must match")
 
         super().set_gguf_parameters()
         self.gguf_writer.add_vocab_size(hp["vocab_size"])
         self.gguf_writer.add_head_count_kv([0 if i + 1 in rda else 1 for i in range(n_layer)])
-        self.gguf_writer.add_ssm_conv_kernel(linear["short_conv_kernel_size"])
+        self.gguf_writer.add_ssm_conv_kernel(rda_config["conv_kernel_size"])
         # the .get() defaults below are the HF config defaults
         self.gguf_writer.add_ssm_time_step_rank(hp.get("rda_decay_rank", 128))
-        self.gguf_writer.add_kda_head_dim(linear["head_dim"])
+        self.gguf_writer.add_kda_head_dim(rda_config["head_dim"])
         # HF uses -5.0 when the key is absent; an explicit null selects the unbounded gate
-        if (bound := linear.get("gate_lower_bound", -5.0)) is not None:
+        if (bound := rda_config.get("gate_lower_bound", -5.0)) is not None:
             self.gguf_writer.add_kda_gate_lower_bound(bound)
         self.gguf_writer.add_q_lora_rank(hp["q_lora_rank"])
         self.gguf_writer.add_kv_lora_rank(hp["kv_lora_rank"])
@@ -134,7 +159,7 @@ class Raon1Model(TextModel):
             del self._mhc[bid, site]
             return
 
-        if ".block_sparse_moe.experts." in name:
+        if ".moe.experts." in name:
             assert bid is not None
             tail = name.split(".experts.", 1)[1].split(".")
             eid, wid = int(tail[0]), tail[1]
@@ -143,12 +168,15 @@ class Raon1Model(TextModel):
                 raise ValueError(f"Invalid expert tensor {name}")
             group[eid] = data_torch
             if len(group) == self.hparams["num_experts"]:
-                tid = {"w1": gguf.MODEL_TENSOR.FFN_GATE_EXP, "w2": gguf.MODEL_TENSOR.FFN_DOWN_EXP,
-                       "w3": gguf.MODEL_TENSOR.FFN_UP_EXP}[wid]
+                tid = {"gate_proj": gguf.MODEL_TENSOR.FFN_GATE_EXP, "down_proj": gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+                       "up_proj": gguf.MODEL_TENSOR.FFN_UP_EXP}[wid]
                 yield self.format_tensor_name(tid, bid), torch.stack([group[i] for i in range(len(group))])
                 del self._experts[bid, wid]
             return
 
+        # moe.gate / moe.shared_experts -> the block_sparse_moe names the tensor map already has
+        if ".moe." in name:
+            name = name.replace(".moe.", ".block_sparse_moe.")
         if name.endswith("kv_b_proj.weight"):
             heads = self.hparams["num_attention_heads"]
             nk, nv = self.hparams["qk_nope_head_dim"], self.hparams["v_head_dim"]

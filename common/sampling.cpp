@@ -5,6 +5,7 @@
 #include "log.h"
 #include "reasoning-budget.h"
 #include "speculative.h"
+#include "speculative-internal.h"
 
 #include "ggml.h"
 
@@ -817,6 +818,72 @@ static float prob_of(const llama_token_data * data, size_t n, llama_token id) {
     return 0.0f;
 }
 
+bool common_sampler_rejection_step(const llama_token_data * cand, size_t n_cand, const llama_token_data * mask,
+        const std::vector<llama_token_data> & q, llama_token x, std::mt19937 & rng,
+        std::vector<llama_token_data> & residual, llama_token * id) {
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+
+    // a candidate the grammar rejects carries no probability, whatever the target thinks
+    auto p_raw = [&](size_t k) {
+        return mask && mask[k].logit == -INFINITY ? 0.0f : cand[k].p;
+    };
+
+    // masking drops probability mass, so rescale what is left or the residual is over-weighted
+    float p_sum = 0.0f;
+    if (mask) {
+        for (size_t k = 0; k < n_cand; ++k) {
+            p_sum += p_raw(k);
+        }
+    }
+
+    const float p_norm = mask && p_sum > 0.0f ? 1.0f/p_sum : 1.0f;
+
+    auto p_of = [&](size_t k) {
+        return p_raw(k)*p_norm;
+    };
+
+    // q_x is never 0 for a token the draft produced, but guard the divide
+    const float q_x = prob_of(q.data(), q.size(), x);
+
+    float p_x = 0.0f;
+    for (size_t k = 0; k < n_cand; ++k) {
+        if (cand[k].id == x) {
+            p_x = p_of(k);
+            break;
+        }
+    }
+
+    if (q_x > 0.0f && (p_x >= q_x || uni(rng) < p_x / q_x)) {
+        return true;
+    }
+
+    // rejected: tokens outside q's support keep all of p
+    residual.clear();
+    float sum = 0.0f;
+    for (size_t k = 0; k < n_cand; ++k) {
+        const float r = p_of(k) - prob_of(q.data(), q.size(), cand[k].id);
+        if (r > 0.0f) {
+            residual.push_back({ cand[k].id, 0.0f, r });
+            sum += r;
+        }
+    }
+
+    *id = LLAMA_TOKEN_NULL;
+    if (sum > 0.0f) {
+        float u = uni(rng) * sum;
+        *id = residual.back().id;
+        for (const auto & e : residual) {
+            u -= e.p;
+            if (u <= 0.0f) {
+                *id = e.id;
+                break;
+            }
+        }
+    }
+
+    return false;
+}
+
 // Accept a drafted token with probability min(1, p/q), else draw from norm(max(0, p - q)).
 // Preserves the target distribution exactly, and accepts more often than matching does when the
 // draft samples instead of taking its argmax.
@@ -826,9 +893,6 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());
-
-    // draws come from the sampler's own stream, so they stay independent of what was drafted
-    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
 
     std::vector<llama_token_data> residual;
 
@@ -840,7 +904,6 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
         const llama_token id_tgt = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
 
         const auto * cur_p = common_sampler_get_candidates(gsmpl, true);
-        const auto & q     = draft_q[i];
 
         const bool masked = !grammar_first && grammar_should_apply(gsmpl);
         if (masked) {
@@ -849,64 +912,17 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
             llama_sampler_apply(gsmpl->grmr, &arr);
         }
 
-        // a candidate the grammar rejects carries no probability, whatever the target thinks
-        auto p_raw = [&](size_t k) {
-            return masked && cand[k].logit == -INFINITY ? 0.0f : cur_p->data[k].p;
-        };
-
-        // masking drops probability mass, so rescale what is left or the residual is over-weighted
-        float p_sum = 0.0f;
-        if (masked) {
-            for (size_t k = 0; k < cur_p->size; ++k) {
-                p_sum += p_raw(k);
-            }
-        }
-
-        const float p_norm = masked && p_sum > 0.0f ? 1.0f/p_sum : 1.0f;
-
-        auto p_of = [&](size_t k) {
-            return p_raw(k)*p_norm;
-        };
-
-        // q_x is never 0 for a token the draft produced, but guard the divide
-        const float q_x = prob_of(q.data(), q.size(), draft[i]);
-
-        float p_x = 0.0f;
-        for (size_t k = 0; k < cur_p->size; ++k) {
-            if (cur_p->data[k].id == draft[i]) {
-                p_x = p_of(k);
-                break;
-            }
-        }
-
-        if (q_x > 0.0f && (p_x >= q_x || uni(gsmpl->rng) < p_x / q_x)) {
+        // draws come from the sampler's own stream, so they stay independent of what was drafted
+        llama_token id = LLAMA_TOKEN_NULL;
+        if (common_sampler_rejection_step(cur_p->data, cur_p->size, masked ? cand.data() : nullptr,
+                    draft_q[i], draft[i], gsmpl->rng, residual, &id)) {
             common_sampler_accept(gsmpl, draft[i], true);
             result.push_back(draft[i]);
             continue;
         }
 
-        // rejected: tokens outside q's support keep all of p
-        residual.clear();
-        float sum = 0.0f;
-        for (size_t k = 0; k < cur_p->size; ++k) {
-            const float r = p_of(k) - prob_of(q.data(), q.size(), cur_p->data[k].id);
-            if (r > 0.0f) {
-                residual.push_back({ cur_p->data[k].id, 0.0f, r });
-                sum += r;
-            }
-        }
-
-        llama_token id = id_tgt;
-        if (sum > 0.0f) {
-            float u = uni(gsmpl->rng) * sum;
-            id = residual.back().id;
-            for (const auto & e : residual) {
-                u -= e.p;
-                if (u <= 0.0f) {
-                    id = e.id;
-                    break;
-                }
-            }
+        if (id == LLAMA_TOKEN_NULL) {
+            id = id_tgt;
         }
 
         common_sampler_accept(gsmpl, id, true);

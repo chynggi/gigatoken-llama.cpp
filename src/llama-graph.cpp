@@ -1414,7 +1414,9 @@ void llm_graph_result::reset() {
     moe_sel_experts.clear();
     hdmd_inputs.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    // + room for the graph-key work buffer of set_graph_key()
+    buf_compute_meta.resize(ggml_tensor_overhead()*(max_nodes + 1) + ggml_graph_overhead_custom(max_nodes, false) +
+                            (size_t) GRAPH_KEY_MAX*GGML_MEM_ALIGN);
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
@@ -1425,6 +1427,12 @@ void llm_graph_result::reset() {
     ctx_compute.reset(ggml_init(params));
 
     gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
+}
+
+void llm_graph_result::set_graph_key(uint32_t key) {
+    // ggml-cuda keys CUDA graphs by the first node's address; a key-sized work buffer before the first node gives each
+    // key its own address, so ggml-cuda keeps one instance per key instead of updating one in place (cudaGraphExecUpdate)
+    ggml_new_buffer(ctx_compute.get(), (size_t) (key % GRAPH_KEY_MAX)*GGML_MEM_ALIGN);
 }
 
 void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
@@ -1893,6 +1901,21 @@ llm_graph_qkv llm_graph_context::build_qkv(
 }
 
 
+ggml_tensor * llm_graph_context::build_situ(
+         ggml_tensor * gate,
+         ggml_tensor * up) const {
+    const float beta = hparams.situ_beta;
+    const float lb   = hparams.situ_linear_beta;
+
+    ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, gate, 1.0f/beta)), beta);
+    act = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, gate));
+
+    if (lb > 0.0f) {
+        up = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, up, 1.0f/lb)), lb);
+    }
+    return ggml_mul(ctx0, act, up);
+}
+
 ggml_tensor * llm_graph_context::build_ffn(
          ggml_tensor * cur,
          ggml_tensor * up,
@@ -2078,7 +2101,12 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cb(cur, "ffn_reglu", il);
             } break;
         case LLM_FFN_SITU:
-            GGML_ABORT("not yet supported");
+            {
+                GGML_ASSERT(gate && type_gate == LLM_FFN_PAR);
+                cur = build_situ(cur, tmp);
+                cb(cur, "ffn_situ", il);
+                type_gate = LLM_FFN_SEQ;
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -2429,17 +2457,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             } break;
         case LLM_FFN_SITU:
             {
-                // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb)
                 GGML_ASSERT(has_gate);
-                const float beta = hparams.situ_beta;
-                const float lb   = hparams.situ_linear_beta;
-
-                ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/beta)), beta);
-                act = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, cur));
-                if (lb > 0.0f) {
-                    up = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, up, 1.0f/lb)), lb);
-                }
-                cur = ggml_mul(ctx0, act, up);
+                cur = build_situ(cur, up);
                 cb(cur, "ffn_moe_situ", il);
             } break;
         case LLM_FFN_GELU:

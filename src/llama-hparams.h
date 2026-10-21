@@ -140,6 +140,7 @@ struct llama_hparams {
     float f_norm_eps;
     float f_norm_rms_eps;
     float f_norm_group_eps;
+    float f_norm_rms_eps_latent = 0.0f; // RMS norm of the MLA q/kv latents (Raon-1)
 
     // post norms use their own epsilon
     float f_post_norm_eps = 0.0f;
@@ -261,6 +262,10 @@ struct llama_hparams {
 
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
+
+    // per-token width of the extracted layer inputs (0 = use n_embd)
+    // e.g. hyper-connection models carry hc_mult * n_embd residual streams
+    uint32_t n_embd_layer_inp_impl = 0;
 
     uint32_t dflash_block_size       = 0;
     uint32_t dflash_conv_kernel_size = 0;
@@ -463,6 +468,9 @@ struct llama_hparams {
 
     // dimension of output embeddings
     uint32_t n_embd_out() const;
+
+    // dimension of the extracted layer inputs (see llama_get_embeddings_layer_inp)
+    uint32_t n_embd_layer_inp() const;
 
     // dimension of key/value embeddings for each head (per layer)
     uint32_t n_embd_head_k(uint32_t il = 0) const;

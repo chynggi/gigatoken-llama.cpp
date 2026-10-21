@@ -393,6 +393,9 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_RAON:
+                regex_exprs = {" ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+)*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"};
+                break;
             case LLAMA_VOCAB_PRE_TYPE_QWEN35:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -634,7 +637,16 @@ struct llm_tokenizer_bpe_session {
 
     virtual void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        // Raon-1's HF tokenizer applies an NFC normalizer before pre-tokenization.
+        // TODO: the converter also writes tokenizer.ggml.normalizer.nfc (read for UGM only); gate BPE on that flag once #30708 lands
+        const bool normalize_nfc = vocab.get_pre_type() == LLAMA_VOCAB_PRE_TYPE_RAON;
+        std::string normalized;
+        if (normalize_nfc) {
+            for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
+                normalized += unicode_cpt_to_utf8(cpt);
+            }
+        }
+        auto word_collection = unicode_regex_split(normalize_nfc ? normalized : text, tokenizer.regex_exprs, tokenizer.byte_encode);
 
         symbols_final.clear();
         auto tok_pre = vocab.get_pre_type();
@@ -2524,6 +2536,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "kormo" ||
                     tokenizer_pre == "f2llmv2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
+                clean_spaces = false;
+            } else if (tokenizer_pre == "raon") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_RAON;
                 clean_spaces = false;
             } else if (
                     tokenizer_pre == "qwen35") {

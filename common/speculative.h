@@ -82,7 +82,7 @@ struct common_speculative_draft_params {
     std::vector<common_speculative_token_dist> * dists = nullptr;
     float temperature = 0.0f;
 
-    // candidate distribution per drafted token; set it to make draft-simple and draft-mtp sample
+    // candidate distribution per drafted token; set it to make draft-simple, draft-mtp and draft-dflash (DFlash2 only) sample
     std::vector<std::vector<llama_token_data>> * result_q = nullptr;
 
     // the target's temp and seed, read only when the drafter samples probabilistically

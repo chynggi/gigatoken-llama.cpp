@@ -82,9 +82,9 @@ public:
     // from a state file all have rs_idx == 0 but n_rs_seq slots of stale or foreign data behind
     // them. Without this bound a seq_rm rollback of r steps silently restores a state that never
     // existed -- the read-side twin of the writer bug fixed in llamAmpere 3772c377e.
-    // Grows by the number of tokens a ubatch contributes for the seq (capped at n_rs_seq),
-    // shrinks by the rollback distance when one is accepted, and is zeroed by every path that
-    // invalidates the snapshots: clear(), rm_all, and state_read.
+    // Set to min(n_rs_seq, n_seq_tokens - 1) by each ubatch (older slots are not shifted, so they
+    // do not survive it), shrinks by the rollback distance when one is accepted, and is zeroed by
+    // every path that invalidates the snapshots: clear(), rm_all, seq_div, cell relocation and state_read.
     std::vector<uint32_t> rs_valid;
 
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);

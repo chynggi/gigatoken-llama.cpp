@@ -425,6 +425,10 @@ void llama_memory_recurrent::seq_div(llama_seq_id seq_id, llama_pos p0, llama_po
             auto & cell = cells[tail_id];
             if (cell.has_seq_id(seq_id) && p0 <= cell.pos && cell.pos < p1) {
                 cell.pos /= d;
+                // the rollback distance no longer maps to a snapshot slot
+                if ((size_t) seq_id < rs_valid.size()) {
+                    rs_valid[seq_id] = 0;
+                }
             }
         }
     }
@@ -731,13 +735,10 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
             cell.seq_id.insert(seq_id);
             cells[seq_id].tail = cell_id;
 
-            // RB1b: this ubatch contributes n_seq_tokens new snapshots for the seq (the writer
-            // bound from llamAmpere 3772c377e), so that many more slots behind the head are now real.
-            // Saturates at the ring capacity; older slots survive, which is why this accumulates
-            // rather than assigns.
+            // the ubatch writes slots 0..n_seq_tokens-1 and does not shift the older ones, so only
+            // rollbacks within it are valid (slot n_seq_tokens is the state before it, not kept)
             if (n_rs_seq != 0 && (size_t) seq_id < rs_valid.size()) {
-                const uint64_t grown = (uint64_t) rs_valid[seq_id] + n_seq_tokens;
-                rs_valid[seq_id] = grown > n_rs_seq ? n_rs_seq : (uint32_t) grown;
+                rs_valid[seq_id] = std::min(n_rs_seq, n_seq_tokens - 1);
             }
         }
     }
@@ -762,6 +763,14 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
         }
 
         for (int i = min; i <= max; ++i) {
+            if (i >= min + (int32_t) n_seqs && cells[i].src != i && n_rs_seq != 0) {
+                // only the current state is copied for relocated idle cells
+                for (const llama_seq_id seq_id : cells[i].seq_id) {
+                    if ((size_t) seq_id < rs_valid.size()) {
+                        rs_valid[seq_id] = 0;
+                    }
+                }
+            }
             if (cells[i].src < 0) {
                 GGML_ASSERT(rs_z >= 0);
                 cells[i].src0 = rs_z;

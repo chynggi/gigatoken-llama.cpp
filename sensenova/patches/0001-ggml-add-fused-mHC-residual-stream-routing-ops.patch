@@ -1,0 +1,731 @@
+From db6487bb388f726010b35d0b6d0707b6f6b462fa Mon Sep 17 00:00:00 2001
+From: Guideboard Labs <contact@guideboardlabs.com>
+Date: Fri, 30 Oct 2026 16:02:57 -0400
+Subject: [PATCH 1/2] ggml: add fused mHC residual-stream routing ops
+
+Two nodes replace roughly a hundred per router: ggml_mhc_route folds the
+streams, normalises, projects the eight router logits and runs the sinkhorn
+passes; ggml_mhc_merge mixes the 2x2 matrix and adds the sublayer output.
+
+Implemented for the CPU backend and as Vulkan compute shaders, so a graph
+that uses them stays on device instead of being cut once per router.
+---
+ ggml/include/ggml.h                           |  17 +++
+ ggml/src/ggml-cpu/ggml-cpu.c                  |  10 ++
+ ggml/src/ggml-cpu/ops.cpp                     | 139 +++++++++++++++++
+ ggml/src/ggml-cpu/ops.h                       |   2 +
+ .../ggml-vulkan/ggml-vulkan-push-constants.h  |  14 ++
+ ggml/src/ggml-vulkan/ggml-vulkan-types.h      |   3 +
+ ggml/src/ggml-vulkan/ggml-vulkan.cpp          |  78 ++++++++++
+ .../ggml-vulkan/vulkan-shaders/mhc_merge.comp |  51 +++++++
+ .../ggml-vulkan/vulkan-shaders/mhc_route.comp | 140 ++++++++++++++++++
+ .../vulkan-shaders/vulkan-shaders-gen.cpp     |   2 +
+ ggml/src/ggml.c                               |  74 ++++++++-
+ 11 files changed, 528 insertions(+), 2 deletions(-)
+ create mode 100644 ggml/src/ggml-vulkan/vulkan-shaders/mhc_merge.comp
+ create mode 100644 ggml/src/ggml-vulkan/vulkan-shaders/mhc_route.comp
+
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index b188c0b..90cb972 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -576,6 +576,8 @@ extern "C" {
+         GGML_OP_FLASH_ATTN_BACK,
+         GGML_OP_SSM_CONV,
+         GGML_OP_SSM_SCAN,
++        GGML_OP_MHC_ROUTE,
++        GGML_OP_MHC_MERGE,
+         GGML_OP_WIN_PART,
+         GGML_OP_WIN_UNPART,
+         GGML_OP_GET_REL_POS,
+@@ -2548,6 +2550,21 @@ extern "C" {
+             struct ggml_tensor  * sx,
+             struct ggml_tensor  * c);
+ 
++    // sense nova loop: residual stream router and stream merge (fused, two streams)
++    GGML_API struct ggml_tensor * ggml_mhc_route(
++            struct ggml_context * ctx,
++            struct ggml_tensor  * a,
++            struct ggml_tensor  * b,
++            struct ggml_tensor  * w,
++            struct ggml_tensor  * bias);
++
++    GGML_API struct ggml_tensor * ggml_mhc_merge(
++            struct ggml_context * ctx,
++            struct ggml_tensor  * a,
++            struct ggml_tensor  * b,
++            struct ggml_tensor  * x,
++            struct ggml_tensor  * packed);
++
+     GGML_API struct ggml_tensor * ggml_ssm_scan(
+             struct ggml_context * ctx,
+             struct ggml_tensor  * s,
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index f4eaea5..98dc457 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -2059,6 +2059,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             {
+                 ggml_compute_forward_ssm_scan(params, tensor);
+             } break;
++        case GGML_OP_MHC_ROUTE:
++            {
++                ggml_compute_forward_mhc_route(params, tensor);
++            } break;
++        case GGML_OP_MHC_MERGE:
++            {
++                ggml_compute_forward_mhc_merge(params, tensor);
++            } break;
+         case GGML_OP_WIN_PART:
+             {
+                 ggml_compute_forward_win_part(params, tensor);
+@@ -2448,6 +2456,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
+         case GGML_OP_FLASH_ATTN_BACK:
+         case GGML_OP_SSM_CONV:
+         case GGML_OP_SSM_SCAN:
++        case GGML_OP_MHC_ROUTE:
++        case GGML_OP_MHC_MERGE:
+         case GGML_OP_LIGHTNING_INDEXER:
+             {
+                 n_tasks = n_threads;
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index d3a156b..52afe1a 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -12510,3 +12510,142 @@ void ggml_compute_forward_lightning_indexer(
+         }
+     }
+ }
++
++// ---- sense nova loop: fused residual stream routers ----
++// sense nova loop residual stream routers, fused.
++//
++// The router is small but fiddly: an RMS norm over the two streams flattened together, eight
++// logits, two gates per stream, a gate per stream for the sublayer output, and a 2x2 mixing
++// matrix that twenty sinkhorn passes of row-then-column normalisation (in log space) turn into a
++// doubly stochastic one. Ninety six of those per token is a mountain of tiny graph nodes, so the
++// whole thing lives here as a single op.
++//
++// Inputs may be views (the streams come out of the merge op as two halves of one buffer), so rows
++// are addressed through nb[1] and nb[2]; elements inside a row are unit stride.
++
++void ggml_compute_forward_mhc_route(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
++    const struct ggml_tensor * a    = dst->src[0];
++    const struct ggml_tensor * b    = dst->src[1];
++    const struct ggml_tensor * w    = dst->src[2];
++    const struct ggml_tensor * bias = dst->src[3];
++
++    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
++    GGML_ASSERT(w->type == GGML_TYPE_F32 && bias->type == GGML_TYPE_F32);
++    GGML_ASSERT(ggml_is_contiguous(w) && ggml_is_contiguous(bias));
++    GGML_ASSERT(ggml_is_contiguous(dst));
++    GGML_ASSERT(a->nb[0] == sizeof(float) && b->nb[0] == sizeof(float));
++
++    const int64_t d     = a->ne[0];
++    const int64_t n_tok = a->ne[1];
++    const int64_t n_str = a->ne[2];
++
++    GGML_ASSERT(b->ne[0] == d && b->ne[1] == n_tok && b->ne[2] == n_str);
++    GGML_ASSERT(w->ne[0] == 2*d && w->ne[1] == 8);
++
++    const float * pw    = (const float *) w->data;
++    const float * pbias = (const float *) bias->data;
++    float       * out   = (float *) dst->data;
++
++    const int sink_iters = 20;
++
++    for (int64_t s = 0; s < n_str; ++s) {
++        for (int64_t t = params->ith; t < n_tok; t += params->nth) {
++            const float * va = (const float *) ((const char *) a->data + t*a->nb[1] + s*a->nb[2]);
++            const float * vb = (const float *) ((const char *) b->data + t*b->nb[1] + s*b->nb[2]);
++            float       * po = out + t*(d + 6) + s*n_tok*(d + 6);
++
++            float ss = 0.0f;
++            for (int64_t i = 0; i < d; ++i) {
++                ss += va[i]*va[i] + vb[i]*vb[i];
++            }
++            const float rms = 1.0f/sqrtf(ss/(2.0f*d) + 1e-6f);
++
++            float lg[8];
++            for (int k = 0; k < 8; ++k) {
++                const float * wk = pw + k*2*d;
++                float acc = 0.0f;
++                for (int64_t i = 0; i < d; ++i) {
++                    acc += wk[i]*va[i] + wk[d + i]*vb[i];
++                }
++                lg[k] = acc*rms + pbias[k];
++            }
++
++            const float pre0  = 1.0f/(1.0f + expf(-lg[0]));
++            const float pre1  = 1.0f/(1.0f + expf(-lg[1]));
++            const float post0 = 2.0f/(1.0f + expf(-lg[2]));
++            const float post1 = 2.0f/(1.0f + expf(-lg[3]));
++
++            float m[2][2] = { { lg[4], lg[5] }, { lg[6], lg[7] } };
++            for (int it = 0; it < sink_iters; ++it) {
++                for (int r = 0; r < 2; ++r) {
++                    const float mx  = m[r][0] > m[r][1] ? m[r][0] : m[r][1];
++                    const float lse = mx + logf(expf(m[r][0] - mx) + expf(m[r][1] - mx));
++                    m[r][0] -= lse;
++                    m[r][1] -= lse;
++                }
++                for (int c = 0; c < 2; ++c) {
++                    const float mx  = m[0][c] > m[1][c] ? m[0][c] : m[1][c];
++                    const float lse = mx + logf(expf(m[0][c] - mx) + expf(m[1][c] - mx));
++                    m[0][c] -= lse;
++                    m[1][c] -= lse;
++                }
++            }
++
++            for (int64_t i = 0; i < d; ++i) {
++                po[i] = pre0*va[i] + pre1*vb[i];
++            }
++            po[d + 0] = post0;
++            po[d + 1] = post1;
++            po[d + 2] = expf(m[0][0]);
++            po[d + 3] = expf(m[0][1]);
++            po[d + 4] = expf(m[1][0]);
++            po[d + 5] = expf(m[1][1]);
++        }
++    }
++}
++
++void ggml_compute_forward_mhc_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
++    const struct ggml_tensor * a      = dst->src[0];
++    const struct ggml_tensor * b      = dst->src[1];
++    const struct ggml_tensor * x      = dst->src[2];
++    const struct ggml_tensor * packed = dst->src[3];
++
++    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
++    GGML_ASSERT(x->type == GGML_TYPE_F32 && packed->type == GGML_TYPE_F32);
++    GGML_ASSERT(ggml_is_contiguous(dst));
++    GGML_ASSERT(a->nb[0] == sizeof(float) && x->nb[0] == sizeof(float) && packed->nb[0] == sizeof(float));
++
++    const int64_t d     = a->ne[0];
++    const int64_t n_tok = a->ne[1];
++    const int64_t n_str = a->ne[2];
++
++    const float * pp  = (const float *) packed->data;
++    float       * out = (float *) dst->data;
++
++    for (int64_t s = 0; s < n_str; ++s) {
++        for (int64_t t = params->ith; t < n_tok; t += params->nth) {
++            const float * va = (const float *) ((const char *) a->data + t*a->nb[1] + s*a->nb[2]);
++            const float * vb = (const float *) ((const char *) b->data + t*b->nb[1] + s*b->nb[2]);
++            const float * vx = (const float *) ((const char *) x->data + t*x->nb[1] + s*x->nb[2]);
++            const float * vp = (const float *) ((const char *) packed->data + t*packed->nb[1] + s*packed->nb[2]);
++            float       * vo = out + t*2*d + s*n_tok*2*d;
++
++            const float post0 = vp[d + 0];
++            const float post1 = vp[d + 1];
++            const float m00   = vp[d + 2];
++            const float m01   = vp[d + 3];
++            const float m10   = vp[d + 4];
++            const float m11   = vp[d + 5];
++
++            for (int64_t i = 0; i < d; ++i) {
++                const float vav = va[i];
++                const float vbv = vb[i];
++                const float vxv = vx[i];
++                vo[i]     = m00*vav + m01*vbv + post0*vxv;
++                vo[d + i] = m10*vav + m11*vbv + post1*vxv;
++            }
++        }
++    }
++
++    GGML_UNUSED(pp);
++}
+diff --git a/ggml/src/ggml-cpu/ops.h b/ggml/src/ggml-cpu/ops.h
+index 00a2ea7..6c420f7 100644
+--- a/ggml/src/ggml-cpu/ops.h
++++ b/ggml/src/ggml-cpu/ops.h
+@@ -92,6 +92,8 @@ void ggml_compute_forward_flash_attn_back(
+         const bool masked,
+         struct ggml_tensor * dst);
+ void ggml_compute_forward_ssm_conv(const struct ggml_compute_params * params, struct ggml_tensor * dst);
++void ggml_compute_forward_mhc_route(const struct ggml_compute_params * params, struct ggml_tensor * dst);
++void ggml_compute_forward_mhc_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ void ggml_compute_forward_ssm_scan(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ void ggml_compute_forward_win_part(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ void ggml_compute_forward_win_unpart(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h b/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h
+index 219c477..abdca5b 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h
+@@ -723,6 +723,20 @@ struct vk_op_ssm_conv_push_constants {
+     uint32_t nc, ncs, nr, n_t, n_s;
+ };
+ 
++struct vk_op_mhc_route_push_constants {
++    uint32_t nb_a1; uint32_t nb_a2; uint32_t pad_a;
++    uint32_t nb_b1; uint32_t nb_b2; uint32_t pad_b;
++    uint32_t n_d; uint32_t n_tok; uint32_t n_str;
++};
++
++struct vk_op_mhc_merge_push_constants {
++    uint32_t nb_a1; uint32_t nb_a2;
++    uint32_t nb_b1; uint32_t nb_b2;
++    uint32_t nb_x1; uint32_t nb_x2;
++    uint32_t nb_p1; uint32_t nb_p2;
++    uint32_t n_d; uint32_t n_tok; uint32_t n_str;
++};
++
+ struct vk_op_conv2d_push_constants {
+     uint32_t Cout;
+     uint32_t Cin;
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-types.h b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+index a150555..d934541 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+@@ -970,6 +970,9 @@ struct vk_device_struct {
+     vk_pipeline pipeline_ssm_scan_f32_d128;
+     vk_pipeline pipeline_ssm_scan_f32_d256;
+     vk_pipeline pipeline_ssm_conv_f32;
++
++    vk_pipeline pipeline_mhc_route_f32;
++    vk_pipeline pipeline_mhc_merge_f32;
+     vk_pipeline pipeline_ssm_conv_silu_f32;
+     vk_pipeline pipeline_ssm_conv_bias_silu_f32;
+     vk_pipeline pipeline_opt_step_adamw_f32;
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index c094368..67ec296 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -3760,6 +3760,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_silu_f32,      "ssm_conv_silu_f32",      ssm_conv_f32_len, ssm_conv_f32_data, "main", 4, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16, 0, 1}, 1);
+     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_bias_silu_f32, "ssm_conv_bias_silu_f32", ssm_conv_f32_len, ssm_conv_f32_data, "main", 4, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16, 1, 1}, 1);
+ 
++    ggml_vk_create_pipeline(device, device->pipeline_mhc_route_f32, "mhc_route_f32", mhc_route_f32_len, mhc_route_f32_data, "main", 5, sizeof(vk_op_mhc_route_push_constants), {256, 1, 1}, {}, 1);
++    ggml_vk_create_pipeline(device, device->pipeline_mhc_merge_f32, "mhc_merge_f32", mhc_merge_f32_len, mhc_merge_f32_data, "main", 5, sizeof(vk_op_mhc_merge_push_constants), {256, 1, 1}, {}, 1);
++
+     ggml_vk_create_pipeline(device, device->pipeline_opt_step_adamw_f32, "opt_step_adamw_f32", opt_step_adamw_f32_len, opt_step_adamw_f32_data, "main", 5, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
+ 
+     ggml_vk_create_pipeline(device, device->pipeline_opt_step_sgd_f32, "opt_step_sgd_f32", opt_step_sgd_f32_len, opt_step_sgd_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
+@@ -7266,6 +7269,57 @@ void ggml_vk_dsv4_hc_comb(ggml_backend_vk_context * ctx, vk_context& subctx, con
+     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { mixes_buf, scale_buf, base_buf, dst_buf }, pc, { n_tokens, 1, 1 });
+ }
+ 
++void ggml_vk_mhc_route(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * w, const ggml_tensor * bias, ggml_tensor * dst) {
++    VK_LOG_DEBUG("ggml_vk_mhc_route(" << a << ", " << b << ", " << w << ", " << bias << ", " << dst << ")");
++
++    vk_pipeline pipeline = ctx->device->pipeline_mhc_route_f32;
++    GGML_ASSERT(pipeline != nullptr);
++
++    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
++
++    const vk_subbuffer a_buf    = ggml_vk_tensor_subbuffer(ctx, a,    true);
++    const vk_subbuffer b_buf    = ggml_vk_tensor_subbuffer(ctx, b,    true);
++    const vk_subbuffer w_buf    = ggml_vk_tensor_subbuffer(ctx, w,    true);
++    const vk_subbuffer bias_buf = ggml_vk_tensor_subbuffer(ctx, bias, true);
++    const vk_subbuffer dst_buf  = ggml_vk_tensor_subbuffer(ctx, dst,  true);
++
++    vk_op_mhc_route_push_constants pc = {
++        ggml_vk_nb_elem(a, 1), ggml_vk_nb_elem(a, 2), 0,
++        ggml_vk_nb_elem(b, 1), ggml_vk_nb_elem(b, 2), 0,
++        (uint32_t) a->ne[0], (uint32_t) a->ne[1], (uint32_t) a->ne[2],
++    };
++    init_pushconst_tensor_offsets(ctx, pc, a, b, w, bias, dst);
++
++    // elements are thread counts: the dispatcher divides by the pipeline workgroup size
++    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a_buf, b_buf, w_buf, bias_buf, dst_buf }, pc, { (uint32_t) (256 * a->ne[1]), 1, 1 });
++}
++
++void ggml_vk_mhc_merge(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * x, const ggml_tensor * packed, ggml_tensor * dst) {
++    VK_LOG_DEBUG("ggml_vk_mhc_merge(" << a << ", " << b << ", " << x << ", " << packed << ", " << dst << ")");
++
++    vk_pipeline pipeline = ctx->device->pipeline_mhc_merge_f32;
++    GGML_ASSERT(pipeline != nullptr);
++
++    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
++
++    const vk_subbuffer a_buf = ggml_vk_tensor_subbuffer(ctx, a,      true);
++    const vk_subbuffer b_buf = ggml_vk_tensor_subbuffer(ctx, b,      true);
++    const vk_subbuffer x_buf = ggml_vk_tensor_subbuffer(ctx, x,      true);
++    const vk_subbuffer p_buf = ggml_vk_tensor_subbuffer(ctx, packed, true);
++    const vk_subbuffer d_buf = ggml_vk_tensor_subbuffer(ctx, dst,    true);
++
++    vk_op_mhc_merge_push_constants pc = {
++        ggml_vk_nb_elem(a, 1), ggml_vk_nb_elem(a, 2),
++        ggml_vk_nb_elem(b, 1), ggml_vk_nb_elem(b, 2),
++        ggml_vk_nb_elem(x, 1), ggml_vk_nb_elem(x, 2),
++        ggml_vk_nb_elem(packed, 1), ggml_vk_nb_elem(packed, 2),
++        (uint32_t) a->ne[0], (uint32_t) a->ne[1], (uint32_t) a->ne[2],
++    };
++    init_pushconst_tensor_offsets(ctx, pc, a, b, x, packed, dst);
++
++    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a_buf, b_buf, x_buf, p_buf, d_buf }, pc, { (uint32_t) a->ne[0], (uint32_t) a->ne[1], (uint32_t) a->ne[2] });
++}
++
+ void ggml_vk_dsv4_hc_pre(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * weights, ggml_tensor * dst) {
+     VK_LOG_DEBUG("ggml_vk_dsv4_hc_pre(" << x << ", " << weights << ", " << dst << ")");
+ 
+@@ -12765,6 +12819,12 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
+     case GGML_OP_CUMSUM:
+         ggml_vk_cumsum(ctx, compute_ctx, src0, node);
+ 
++        break;
++    case GGML_OP_MHC_ROUTE:
++        ggml_vk_mhc_route(ctx, compute_ctx, node->src[0], node->src[1], node->src[2], node->src[3], node);
++        break;
++    case GGML_OP_MHC_MERGE:
++        ggml_vk_mhc_merge(ctx, compute_ctx, node->src[0], node->src[1], node->src[2], node->src[3], node);
+         break;
+     case GGML_OP_DSV4_HC_COMB:
+         ggml_vk_dsv4_hc_comb(ctx, compute_ctx, src0, src1, src2, node);
+@@ -16123,6 +16183,24 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
+             }
+         case GGML_OP_SSM_CONV:
+             return op->src[0]->type == GGML_TYPE_F32;
++        case GGML_OP_MHC_ROUTE:
++        case GGML_OP_MHC_MERGE:
++            {
++                if (op->type != GGML_TYPE_F32) {
++                    return false;
++                }
++                // these two ops take exactly four sources
++                for (uint32_t i = 0; i < 4; ++i) {
++                    if (op->src[i] == nullptr || op->src[i]->type != GGML_TYPE_F32) {
++                        return false;
++                    }
++                    if (op->src[i]->nb[0] != sizeof(float)) {
++                        return false;
++                    }
++                }
++                return true;
++            }
++
+         case GGML_OP_CONV_TRANSPOSE_1D:
+             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+         case GGML_OP_COL2IM_1D:
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/mhc_merge.comp b/ggml/src/ggml-vulkan/vulkan-shaders/mhc_merge.comp
+new file mode 100644
+index 0000000..67e8384
+--- /dev/null
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/mhc_merge.comp
+@@ -0,0 +1,51 @@
++#version 450
++
++// Mix the two residual streams with the router's 2x2 matrix and add the sublayer output to each.
++// Pure elementwise work, one thread per output element.
++
++layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
++
++layout(push_constant) uniform parameter {
++    uint nb_a1; uint nb_a2;
++    uint nb_b1; uint nb_b2;
++    uint nb_x1; uint nb_x2;
++    uint nb_p1; uint nb_p2;
++    uint n_d; uint n_tok; uint n_str;
++} pc;
++
++layout(binding = 0, std430) readonly buffer A { float data_a[]; };
++layout(binding = 1, std430) readonly buffer B { float data_b[]; };
++layout(binding = 2, std430) readonly buffer X { float data_x[]; };
++layout(binding = 3, std430) readonly buffer P { float data_p[]; };
++layout(binding = 4, std430) buffer D { float data_d[]; };
++
++void main() {
++    const uint i = gl_GlobalInvocationID.x;
++    const uint t = gl_GlobalInvocationID.y;
++    const uint s = gl_GlobalInvocationID.z;
++    const uint d = pc.n_d;
++
++    if (i >= d) {
++        return;
++    }
++
++    const uint off_a = (t*pc.nb_a1 + s*pc.nb_a2);
++    const uint off_b = (t*pc.nb_b1 + s*pc.nb_b2);
++    const uint off_x = (t*pc.nb_x1 + s*pc.nb_x2);
++    const uint off_p = (t*pc.nb_p1 + s*pc.nb_p2);
++    const uint off_d = t*2u*d + s*pc.n_tok*2u*d;
++
++    const float post0 = data_p[off_p + d + 0u];
++    const float post1 = data_p[off_p + d + 1u];
++    const float m00   = data_p[off_p + d + 2u];
++    const float m01   = data_p[off_p + d + 3u];
++    const float m10   = data_p[off_p + d + 4u];
++    const float m11   = data_p[off_p + d + 5u];
++
++    const float va = data_a[off_a + i];
++    const float vb = data_b[off_b + i];
++    const float vx = data_x[off_x + i];
++
++    data_d[off_d + i]     = m00*va + m01*vb + post0*vx;
++    data_d[off_d + d + i] = m10*va + m11*vb + post1*vx;
++}
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/mhc_route.comp b/ggml/src/ggml-vulkan/vulkan-shaders/mhc_route.comp
+new file mode 100644
+index 0000000..692cda1
+--- /dev/null
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/mhc_route.comp
+@@ -0,0 +1,140 @@
++#version 450
++
++#extension GL_EXT_control_flow_attributes : require
++
++// One workgroup per (token, stream). The workgroup folds the two streams together, normalises,
++// projects the eight router logits, runs the twenty sinkhorn passes on a single lane, and writes
++// the pre-weighted branch plus the gates into one packed buffer.
++
++layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
++
++layout(push_constant) uniform parameter {
++    uint nb_a1; uint nb_a2;
++    uint nb_a2_pad;
++    uint nb_b1; uint nb_b2;
++    uint nb_b2_pad;
++    uint n_d; uint n_tok; uint n_str;
++} pc;
++
++layout(binding = 0, std430) readonly buffer A    { float data_a[]; };
++layout(binding = 1, std430) readonly buffer B    { float data_b[]; };
++layout(binding = 2, std430) readonly buffer Wt   { float data_w[]; };
++layout(binding = 3, std430) readonly buffer Bias { float data_bias[]; };
++layout(binding = 4, std430) buffer D { float data_d[]; };
++
++shared float red[9][256];
++shared float gates[8];
++
++float sigmoidf(float x) { return 1.0f / (1.0f + exp(-x)); }
++
++void main() {
++    const uint lid = gl_LocalInvocationID.x;
++    const uint t   = gl_WorkGroupID.x;
++    const uint d   = pc.n_d;
++    const uint n_s = pc.n_str;
++
++    // stream 0 of this token; the other streams are reached with the s stride
++    const uint off_a = t*pc.nb_a1;
++    const uint off_b = t*pc.nb_b1;
++    const uint off_d = t*(d + 6u);
++
++    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
++    float acc4 = 0.0f, acc5 = 0.0f, acc6 = 0.0f, acc7 = 0.0f;
++    float ss   = 0.0f;
++
++    for (uint i = lid; i < 2u*d; i += 256u) {
++        const float v = (i < d) ? data_a[off_a + i] : data_b[off_b + i - d];
++        ss += v*v;
++
++        const uint wb = i;
++        acc0 += data_w[0u*2u*d + wb]*v;
++        acc1 += data_w[1u*2u*d + wb]*v;
++        acc2 += data_w[2u*2u*d + wb]*v;
++        acc3 += data_w[3u*2u*d + wb]*v;
++        acc4 += data_w[4u*2u*d + wb]*v;
++        acc5 += data_w[5u*2u*d + wb]*v;
++        acc6 += data_w[6u*2u*d + wb]*v;
++        acc7 += data_w[7u*2u*d + wb]*v;
++    }
++
++    red[0][lid] = ss;
++    red[1][lid] = acc0; red[2][lid] = acc1; red[3][lid] = acc2; red[4][lid] = acc3;
++    red[5][lid] = acc4; red[6][lid] = acc5; red[7][lid] = acc6; red[8][lid] = acc7;
++
++    barrier();
++    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
++        if (lid < stride) {
++            [[unroll]] for (uint k = 0u; k < 9u; ++k) {
++                red[k][lid] += red[k][lid + stride];
++            }
++        }
++        barrier();
++    }
++
++    if (lid == 0u) {
++        const float rms = inversesqrt(red[0][0] / (2.0f*d) + 1e-6f);
++
++        const float lg0 = red[1][0]*rms + data_bias[0];
++        const float lg1 = red[2][0]*rms + data_bias[1];
++        const float lg2 = red[3][0]*rms + data_bias[2];
++        const float lg3 = red[4][0]*rms + data_bias[3];
++
++        gates[0] = sigmoidf(lg0);
++        gates[1] = sigmoidf(lg1);
++        gates[2] = 2.0f*sigmoidf(lg2);
++        gates[3] = 2.0f*sigmoidf(lg3);
++
++        float m00 = red[5][0]*rms + data_bias[4];
++        float m01 = red[6][0]*rms + data_bias[5];
++        float m10 = red[7][0]*rms + data_bias[6];
++        float m11 = red[8][0]*rms + data_bias[7];
++
++        // twenty passes of row then column normalisation, in log space, exactly as trained
++        for (uint it = 0u; it < 20u; ++it) {
++            float mx  = max(m00, m01);
++            float lse = mx + log(exp(m00 - mx) + exp(m01 - mx));
++            m00 -= lse; m01 -= lse;
++
++            mx  = max(m10, m11);
++            lse = mx + log(exp(m10 - mx) + exp(m11 - mx));
++            m10 -= lse; m11 -= lse;
++
++            mx  = max(m00, m10);
++            lse = mx + log(exp(m00 - mx) + exp(m10 - mx));
++            m00 -= lse; m10 -= lse;
++
++            mx  = max(m01, m11);
++            lse = mx + log(exp(m01 - mx) + exp(m11 - mx));
++            m01 -= lse; m11 -= lse;
++        }
++
++        gates[4] = exp(m00);
++        gates[5] = exp(m01);
++        gates[6] = exp(m10);
++        gates[7] = exp(m11);
++    }
++
++    barrier();
++
++    const float pre0 = gates[0];
++    const float pre1 = gates[1];
++
++    for (uint s = 0u; s < n_s; ++s) {
++        const uint oa = off_a + s*pc.nb_a2;
++        const uint ob = off_b + s*pc.nb_b2;
++        const uint od = off_d + s*pc.n_tok*(d + 6u);
++
++        for (uint i = lid; i < d; i += 256u) {
++            data_d[od + i] = pre0*data_a[oa + i] + pre1*data_b[ob + i];
++        }
++
++        if (lid == 0u) {
++            data_d[od + d + 0u] = gates[2];
++            data_d[od + d + 1u] = gates[3];
++            data_d[od + d + 2u] = gates[4];
++            data_d[od + d + 3u] = gates[5];
++            data_d[od + d + 4u] = gates[6];
++            data_d[od + d + 5u] = gates[7];
++        }
++    }
++}
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+index 3af09fb..e3cfe80 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -1114,6 +1114,8 @@ void process_shaders() {
+     string_to_spv("fwht_shmem_f32", "fwht.comp", {{"FWHT_SHMEM", "1"}});
+     string_to_spv("count_equal_i32", "count_equal.comp", merge_maps(base_dict, {{"A_TYPE", "int"}, {"B_TYPE", "int"}, {"D_TYPE", "int"}}));
+     string_to_spv("dsv4_hc_comb_f32", "dsv4_hc_comb.comp", {});
++    string_to_spv("mhc_route_f32", "mhc_route.comp", {});
++    string_to_spv("mhc_merge_f32", "mhc_merge.comp", {});
+     string_to_spv("dsv4_hc_pre_f32",  "dsv4_hc_pre.comp",  {});
+     string_to_spv("dsv4_hc_post_f32", "dsv4_hc_post.comp", {});
+     string_to_spv("cumsum_f32", "cumsum.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index e00f8e2..71ce78e 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -1087,6 +1087,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
+     "FLASH_ATTN_BACK",
+     "SSM_CONV",
+     "SSM_SCAN",
++    "MHC_ROUTE",
++    "MHC_MERGE",
+     "WIN_PART",
+     "WIN_UNPART",
+     "GET_REL_POS",
+@@ -1118,7 +1120,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
+     "GLU",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
++static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
+ 
+ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "none",
+@@ -1203,6 +1205,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "flash_attn_back(x)",
+     "ssm_conv(x)",
+     "ssm_scan(x)",
++    "mhc_route(a, b, w, bias)",
++    "mhc_merge(a, b, x, packed)",
+     "win_part(x)",
+     "win_unpart(x)",
+     "get_rel_pos(x)",
+@@ -1234,7 +1238,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
+     "glu(x)",
+ };
+ 
+-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
++static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
+ 
+ static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
+ 
+@@ -5744,6 +5748,72 @@ struct ggml_tensor * ggml_ssm_conv(
+     return result;
+ }
+ 
++// ggml_mhc_route: gates + sinkhorn + pre-weighted branch in one node
++//
++//   packed = [ d + 6, n_tokens, n_streams ] where rows 0..d-1 are the routed branch input,
++//   rows d and d+1 are the two output gates, rows d+2..d+5 are the 2x2 mixing matrix.
++//   Keeping the gates in the same buffer saves a node and a copy per sublayer.
++
++struct ggml_tensor * ggml_mhc_route(
++        struct ggml_context * ctx,
++        struct ggml_tensor  * a,
++        struct ggml_tensor  * b,
++        struct ggml_tensor  * w,
++        struct ggml_tensor  * bias) {
++    GGML_ASSERT(a->nb[0] == sizeof(float));
++    GGML_ASSERT(b->nb[0] == sizeof(float));
++    GGML_ASSERT(a->type == GGML_TYPE_F32);
++    GGML_ASSERT(b->type == GGML_TYPE_F32);
++    GGML_ASSERT(w->type == GGML_TYPE_F32);
++    GGML_ASSERT(bias->type == GGML_TYPE_F32);
++    GGML_ASSERT(a->ne[0] == b->ne[0] && a->ne[1] == b->ne[1] && a->ne[2] == b->ne[2]);
++    GGML_ASSERT(w->ne[0] == 2*a->ne[0]);
++    GGML_ASSERT(w->ne[1] == 8);
++    GGML_ASSERT(bias->ne[0] == 8);
++
++    const int64_t d = a->ne[0];
++
++    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d + 6, a->ne[1], a->ne[2]);
++
++    result->op     = GGML_OP_MHC_ROUTE;
++    result->src[0] = a;
++    result->src[1] = b;
++    result->src[2] = w;
++    result->src[3] = bias;
++
++    return result;
++}
++
++struct ggml_tensor * ggml_mhc_merge(
++        struct ggml_context * ctx,
++        struct ggml_tensor  * a,
++        struct ggml_tensor  * b,
++        struct ggml_tensor  * x,
++        struct ggml_tensor  * packed) {
++    GGML_ASSERT(a->nb[0] == sizeof(float));
++    GGML_ASSERT(b->nb[0] == sizeof(float));
++    GGML_ASSERT(x->nb[0] == sizeof(float));
++    GGML_ASSERT(packed->nb[0] == sizeof(float));
++    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
++    GGML_ASSERT(x->type == GGML_TYPE_F32 && packed->type == GGML_TYPE_F32);
++    GGML_ASSERT(a->ne[0] == b->ne[0] && a->ne[0] == x->ne[0]);
++    GGML_ASSERT(a->ne[1] == x->ne[1] && a->ne[2] == x->ne[2]);
++    GGML_ASSERT(packed->ne[0] == a->ne[0] + 6);
++    GGML_ASSERT(packed->ne[1] == a->ne[1] && packed->ne[2] == a->ne[2]);
++
++    const int64_t d = a->ne[0];
++
++    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2*d, a->ne[1], a->ne[2]);
++
++    result->op     = GGML_OP_MHC_MERGE;
++    result->src[0] = a;
++    result->src[1] = b;
++    result->src[2] = x;
++    result->src[3] = packed;
++
++    return result;
++}
++
+ // ggml_ssm_scan
+ 
+ struct ggml_tensor * ggml_ssm_scan(
+-- 
+2.43.0
+

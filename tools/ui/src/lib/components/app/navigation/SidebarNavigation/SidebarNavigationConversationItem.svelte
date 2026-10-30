@@ -19,7 +19,14 @@
 	import { TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { FORK_TREE_DEPTH_PADDING, ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
+	import {
+		FORK_TREE_DEPTH_PADDING,
+		ICON_CLASS_DEFAULT,
+		SHORTCUT_DELETE_CONVERSATION,
+		SHORTCUT_EDIT_CONVERSATION,
+		SHORTCUT_EXPORT_CONVERSATION,
+		UI_DATA_ATTRS
+	} from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
 	import { chatStore, conversationsStore, settingsStore, tabsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
@@ -291,7 +298,7 @@
 						icon: Pencil,
 						label: 'Edit',
 						onclick: handleEdit,
-						shortcut: ['shift', 'cmd', 'e']
+						shortcut: SHORTCUT_EDIT_CONVERSATION
 					},
 					{
 						icon: Download,
@@ -300,7 +307,7 @@
 							e.stopPropagation();
 							conversationsStore.downloadConversation(conversation.id);
 						},
-						shortcut: ['shift', 'cmd', 's']
+						shortcut: SHORTCUT_EXPORT_CONVERSATION
 					},
 					{
 						icon: FileText,
@@ -328,7 +335,7 @@
 						label: 'Delete',
 						onclick: handleDelete,
 						separator: true,
-						shortcut: ['shift', 'cmd', 'd'],
+						shortcut: SHORTCUT_DELETE_CONVERSATION,
 						variant: 'destructive'
 					}
 				]}

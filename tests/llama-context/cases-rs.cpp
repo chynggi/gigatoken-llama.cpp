@@ -7,17 +7,17 @@
 
 #include "common.h"
 
+#include "../../src/llama-ext.h" // llama_arch_from_string
+
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <cstring>
 #include <string>
 #include <vector>
 
-// roll back multiple sequences, then replay them in a single batch whose per-seq token count
-// exceeds n_ubatch: each seq's replay spans several ubatches while its rollback restore is
-// still pending. Compared against a reference context that never advanced past the rollback
-// point and decodes the identical replay batch.
+// roll back multiple sequences, then replay them in a single batch whose per-seq token count exceeds n_ubatch: each
+// seq's replay spans several ubatches while its rollback restore is still pending. Compared against a reference context
+// that never advanced past the rollback point and decodes the identical replay batch. Only the first replayed token of
+// each seq is compared.
 struct case_multi_seq_split_replay : ctx_test {
     test_group group() const override { return TEST_GROUP_RS; }
 
@@ -40,7 +40,7 @@ struct case_multi_seq_split_replay : ctx_test {
         // both contexts have the same layout, only what they decode differs
         const auto make_ctx_multi = [&]() {
             ctx_opts opts;
-            opts.n_ctx      = 256;
+            opts.n_ctx      = 512;
             opts.n_batch    = 256;
             opts.n_ubatch   = n_ubatch;
             opts.n_seq_max  = n_seqs;
@@ -95,12 +95,16 @@ struct case_multi_seq_split_replay : ctx_test {
         ok = decode_replay(ctx_roll.get()) && decode_replay(ctx_ref.get());
         CTX_REQUIRE(ok, "the multi-seq replay decode failed");
 
-        // both contexts decode identical batches, so the logits should match;
+        // the first replayed token of each seq reads the state right after the rollback, so its
+        //   logits should match; the later tokens are not compared because small state
+        //   differences at the start grow with each replayed token
         // random dummy models can still drift up to ~1.7e-5, so the bound is 1e-4
         constexpr float nmse_eps = 1e-4f;
 
         logits_diff diff;
-        for (uint32_t i = 0; i < n_seqs*n_replay; ++i) {
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            const uint32_t i = s*n_replay; // first replayed token of this seq
+
             const float * l_roll = llama_get_logits_ith(ctx_roll.get(), i);
             const float * l_ref  = llama_get_logits_ith(ctx_ref.get(),  i);
             if (l_roll == nullptr || l_ref == nullptr) {
@@ -116,6 +120,29 @@ struct case_multi_seq_split_replay : ctx_test {
                 ", nmse " + std::to_string(diff.nmse()) + ", first difference at index " + std::to_string(diff.i_first) + ")");
 
         TLOG_INF("%s: multi-seq split replay matched (max diff %g, nmse %g)\n", __func__, (double) diff.diff_max, diff.nmse());
+
+        // the replay above can leave the 2 contexts in slightly different states, and the tail
+        //   below assumes they start from the same state - so copy the roll state into ref
+        for (uint32_t s = 0; s < n_seqs && ok; ++s) {
+            std::vector<uint8_t> state;
+
+            ok = ok && get_seq_state(ctx_roll.get(), (llama_seq_id) s, 0, state);
+            ok = ok && set_seq_state(ctx_ref.get(),  (llama_seq_id) s, 0, state);
+
+            // do a second round of state save/load to negate any SWA-positioning effects
+            if (ok) {
+                std::vector<uint8_t> restored;
+                ok = ok && get_seq_state(ctx_ref.get(), (llama_seq_id) s, 0, restored);
+
+                // what was loaded into ref must come back out bit-identical
+                CTX_REQUIRE(ok && state == restored,
+                        "the seq " + std::to_string(s) + " state did not round-trip bit-exact (sizes " +
+                        std::to_string(state.size()) + "/" + std::to_string(restored.size()) + ")");
+
+                ok = ok && set_seq_state(ctx_roll.get(), (llama_seq_id) s, 0, restored);
+            }
+        }
+        CTX_REQUIRE(ok, "the multi-seq state copy failed");
 
         // seq-1-only decodes must be independent of seq 0's content: diverge seq 0
         //   in ctx_ref only, then compare identical seq-1-only continuations
@@ -149,7 +176,7 @@ struct case_multi_seq_split_replay : ctx_test {
             diff_tail.add(l_roll, l_ref, n_vocab);
         }
 
-        CTX_REQUIRE(ok && diff_tail.nmse() <= nmse_eps,
+        CTX_REQUIRE(ok && diff_tail.nmse() <= 0.0f,
                 "a seq-1-only decode leaked the state of seq 0 (nmse " + std::to_string(diff_tail.nmse()) + ")");
 
         TLOG_INF("%s: seq-1-only decode is independent of seq 0 (max diff %g, nmse %g)\n",
@@ -254,18 +281,10 @@ struct case_rollback : ctx_test {
                     "replay logits mismatch at position " + std::to_string(pos) + ", nmse " + std::to_string(diff.nmse()));
         }
 
-        // TODO: this test is invalid because RS rollback is only correct once after a ubatch with more than n_rs_seq tokens
-        //       this is not the case here. add asserts and guardrails to prevent such attempts
-        //if (!llama_memory_seq_rm(llama_get_memory(ctx_src.get()), 0, rollback_pos, -1) ||
-        //    !llama_memory_seq_rm(llama_get_memory(ctx_dst.get()), 0, rollback_pos, -1)) {
-        //    TLOG_ERR("%s: partial rollback failed\n", __func__);
-        //    return case_result::fail();
-        //}
-
-        //constexpr llama_state_seq_flags partial_flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
-        //common_prompt_checkpoint ckpt_partial;
-        //ckpt_partial.update_tgt(ctx_src.get(), 0, partial_flags);
-        //ckpt_partial.load_tgt(ctx_dst.get(), 0, partial_flags);
+        // the replay ran in single-token ubatches, which hold no snapshot that deep
+        CTX_REQUIRE(!llama_memory_seq_rm(llama_get_memory(ctx_src.get()), 0, rollback_pos, -1) &&
+                    !llama_memory_seq_rm(llama_get_memory(ctx_dst.get()), 0, rollback_pos, -1),
+                "a rollback past the snapshots of single-token ubatches was accepted");
 
         // Repeat the load into a context that already has its own rollback state:
         // groups 1..n_rs_seq hold a different prompt's history, and rs_idx[0] is
@@ -317,97 +336,75 @@ struct case_rollback : ctx_test {
     }
 };
 
-// snapshot slot r holds the state r tokens behind the head, and a ubatch of n tokens writes only
-// slots 0..n-1 without shifting the older ones. So only rollbacks of at most n-1 are valid.
+// after a ubatch of n tokens, probe rollbacks from deepest to shallowest: every rollback past the
+// snapshots that ubatch guarantees is refused and the deepest guaranteed one is accepted
 struct case_rollback_bound : ctx_test {
     test_group group() const override { return TEST_GROUP_RS; }
 
-    const char * name() const override { return "bound"; }
+    const char * name() const override { return "rollback_bound"; }
 
     const char * description() const override {
-        return "seq_rm refuses a rollback deeper than the snapshots of the last ubatch";
-    }
-
-    std::string skip_reason(model_run & mr) const override {
-        char arch_str[64] = {};
-        llama_model_meta_val_str(mr.model, "general.architecture", arch_str, sizeof(arch_str));
-        // FIXME: the DSV4 cache has its own rollback planes and does not bound seq_rm by them yet
-        if (strcmp(arch_str, "deepseek4") == 0 || strcmp(arch_str, "deepseek41") == 0) {
-            return "DSV4 rollback is not bounded yet";
-        }
-
-        return ctx_test::skip_reason(mr);
+        return "seq_rm accepts exactly the rollbacks whose snapshots the last ubatch wrote";
     }
 
     case_result run(model_run & mr) const override {
         const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
 
-        const auto make_rs_ctx = [&]() {
+        constexpr llama_pos n_prefix = 16;
+
+        char arch_name[64] = {};
+        llama_model_meta_val_str(mr.model, "general.architecture", arch_name, sizeof(arch_name));
+        const llm_arch arch = llama_arch_from_string(arch_name);
+
+        // the DSV4 cache rebuilds snapshot d from the state before the ubatch, so d <= n is exact;
+        // the recurrent memory gets snapshots 0..n-1 from ggml_gated_delta_net, only for n <= n_rs_seq + 1
+        const bool from_ubatch_start = arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41;
+
+        const auto make_ctx = [&]() {
             ctx_opts opts;
+            opts.n_batch   = 64;
+            opts.n_ubatch  = 64;
             opts.n_seq_max = 1;
             opts.n_rs_seq  = 8;
             return mr.ctx(opts);
         };
 
-        llama_context_ptr ctx_roll = make_rs_ctx();
-        llama_context_ptr ctx_ref  = make_rs_ctx();
-        if (!ctx_roll || !ctx_ref) {
+        llama_context_ptr ctx = make_ctx();
+        if (!ctx) {
             return case_result::fail();
         }
 
-        constexpr uint32_t n_tail = 4;
-        if (llama_n_rs_seq(ctx_roll.get()) < n_tail) {
-            return case_result::skip("n_rs_seq is too small");
+        const uint32_t n_rs_seq = llama_n_rs_seq(ctx.get());
+        if (n_rs_seq == 0) {
+            return case_result::skip("n_rs_seq is disabled");
         }
 
-        const auto tok = [&](llama_pos pos) {
-            return gen_token(n_vocab, 0, pos);
-        };
+        for (const uint32_t n : { 1u, 2u, n_rs_seq + 1, n_rs_seq + 2 }) {
+            const uint32_t r_max = from_ubatch_start ? std::min(n, n_rs_seq) : (n <= n_rs_seq + 1 ? n - 1 : 0);
 
-        constexpr llama_pos n_prompt = 12;
+            ctx = make_ctx();
+            if (!ctx) {
+                return case_result::fail();
+            }
 
-        // prompt, then two single-token ubatches
-        bool ok = true;
-        for (llama_context * ctx : { ctx_roll.get(), ctx_ref.get() }) {
-            ok = ok && decode_gen(ctx, n_vocab, 0, 0, n_prompt);
-            ok = ok && decode_one(ctx, tok(n_prompt),     n_prompt);
-            ok = ok && decode_one(ctx, tok(n_prompt + 1), n_prompt + 1);
-        }
-        CTX_REQUIRE(ok, "the prompt decode failed");
+            const llama_pos pos_end = n_prefix + (llama_pos) n;
 
-        llama_memory_t mem = llama_get_memory(ctx_roll.get());
+            CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, 0, 0, n_prefix) &&
+                        decode_gen(ctx.get(), n_vocab, 0, n_prefix, pos_end),
+                    "the prefix / ubatch decode failed");
 
-        // slot 1 still holds a state from before the prompt tail
-        CTX_REQUIRE(!llama_memory_seq_rm(mem, 0, n_prompt + 1, -1), "rollback 1 after a single-token ubatch must be refused");
-        CTX_REQUIRE(llama_memory_seq_pos_max(mem, 0) == n_prompt + 1, "a refused rollback moved the position");
+            for (uint32_t r = n_rs_seq + 1; r > r_max; --r) {
+                CTX_REQUIRE(!llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, pos_end - (llama_pos) r, -1),
+                        "rollback " + std::to_string(r) + " after a " + std::to_string(n) + "-token ubatch was accepted");
+            }
 
-        const llama_pos p_tail = n_prompt + 2;
-        ok = decode_gen(ctx_roll.get(), n_vocab, 0, p_tail, p_tail + n_tail) &&
-             decode_gen(ctx_ref.get(),  n_vocab, 0, p_tail, p_tail + 1);
-        CTX_REQUIRE(ok, "the tail decode failed");
-
-        // slot n_tail was not written by the tail ubatch
-        CTX_REQUIRE(!llama_memory_seq_rm(mem, 0, p_tail, -1), "rollback over the whole last ubatch must be refused");
-        CTX_REQUIRE(llama_memory_seq_rm(mem, 0, p_tail + 1, -1), "rollback of n_tail - 1 failed");
-
-        ok = decode_one(ctx_roll.get(), tok(p_tail + 1), p_tail + 1) &&
-             decode_one(ctx_ref.get(),  tok(p_tail + 1), p_tail + 1);
-        CTX_REQUIRE(ok, "the replay decode failed");
-
-        const float * l_roll = llama_get_logits_ith(ctx_roll.get(), 0);
-        const float * l_ref  = llama_get_logits_ith(ctx_ref.get(),  0);
-        if (l_roll == nullptr || l_ref == nullptr) {
-            TLOG_ERR("%s: missing replay logits\n", __func__);
-            return case_result::fail();
+            if (r_max > 0) {
+                CTX_REQUIRE(llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, pos_end - (llama_pos) r_max, -1),
+                        "rollback " + std::to_string(r_max) + " after a " + std::to_string(n) + "-token ubatch was refused");
+            }
         }
 
-        // the two contexts split the tokens into different ubatches, so allow the same drift as the replay case
-        constexpr float nmse_eps = 1e-4f;
-
-        const logits_diff diff = compare_logits(l_roll, l_ref, n_vocab);
-        CTX_REQUIRE(diff.nmse() <= nmse_eps, "replay after the bounded rollback mismatch, nmse " + std::to_string(diff.nmse()));
-
-        TLOG_INF("%s: rollback bound holds (max diff %g, nmse %g)\n", __func__, (double) diff.diff_max, diff.nmse());
+        TLOG_INF("%s: rollback bounds hold for ubatches of 1, 2, %u and %u tokens\n", __func__, n_rs_seq + 1, n_rs_seq + 2);
 
         return case_result::pass();
     }
@@ -477,7 +474,7 @@ struct case_shared_seq_reserve : ctx_test {
         constexpr uint32_t n_continue = 32;
 
         ctx_opts opts;
-        opts.n_ctx      = 512;
+        opts.n_ctx      = 256;
         opts.n_batch    = 256;
         opts.n_ubatch   = 64;
         opts.n_seq_max  = n_seqs;

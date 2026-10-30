@@ -4100,6 +4100,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_silu_f32,      "ssm_conv_silu_f32",      ssm_conv_f32_len, ssm_conv_f32_data, "main", 4, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16, 0, 1}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_bias_silu_f32, "ssm_conv_bias_silu_f32", ssm_conv_f32_len, ssm_conv_f32_data, "main", 4, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16, 1, 1}, 1);
 
+    ggml_vk_create_pipeline(device, device->pipeline_mhc_route_f32, "mhc_route_f32", mhc_route_f32_len, mhc_route_f32_data, "main", 5, sizeof(vk_op_mhc_route_push_constants), {256, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_mhc_merge_f32, "mhc_merge_f32", mhc_merge_f32_len, mhc_merge_f32_data, "main", 5, sizeof(vk_op_mhc_merge_push_constants), {256, 1, 1}, {}, 1);
+
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_adamw_f32, "opt_step_adamw_f32", opt_step_adamw_f32_len, opt_step_adamw_f32_data, "main", 5, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_sgd_f32, "opt_step_sgd_f32", opt_step_sgd_f32_len, opt_step_sgd_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
@@ -7681,6 +7684,57 @@ void ggml_vk_dsv4_hc_comb(ggml_backend_vk_context * ctx, vk_context& subctx, con
     init_pushconst_tensor_offsets(ctx, pc, mixes, scale, base, nullptr, dst);
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { mixes_buf, scale_buf, base_buf, dst_buf }, pc, { n_tokens, 1, 1 });
+}
+
+void ggml_vk_mhc_route(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * w, const ggml_tensor * bias, ggml_tensor * dst) {
+    VK_LOG_DEBUG("ggml_vk_mhc_route(" << a << ", " << b << ", " << w << ", " << bias << ", " << dst << ")");
+
+    vk_pipeline pipeline = ctx->device->pipeline_mhc_route_f32;
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    const vk_subbuffer a_buf    = ggml_vk_tensor_subbuffer(ctx, a,    true);
+    const vk_subbuffer b_buf    = ggml_vk_tensor_subbuffer(ctx, b,    true);
+    const vk_subbuffer w_buf    = ggml_vk_tensor_subbuffer(ctx, w,    true);
+    const vk_subbuffer bias_buf = ggml_vk_tensor_subbuffer(ctx, bias, true);
+    const vk_subbuffer dst_buf  = ggml_vk_tensor_subbuffer(ctx, dst,  true);
+
+    vk_op_mhc_route_push_constants pc = {
+        ggml_vk_nb_elem(a, 1), ggml_vk_nb_elem(a, 2), 0,
+        ggml_vk_nb_elem(b, 1), ggml_vk_nb_elem(b, 2), 0,
+        (uint32_t) a->ne[0], (uint32_t) a->ne[1], (uint32_t) a->ne[2],
+    };
+    init_pushconst_tensor_offsets(ctx, pc, a, b, w, bias, dst);
+
+    // elements are thread counts: the dispatcher divides by the pipeline workgroup size
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a_buf, b_buf, w_buf, bias_buf, dst_buf }, pc, { (uint32_t) (256 * a->ne[1]), 1, 1 });
+}
+
+void ggml_vk_mhc_merge(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * x, const ggml_tensor * packed, ggml_tensor * dst) {
+    VK_LOG_DEBUG("ggml_vk_mhc_merge(" << a << ", " << b << ", " << x << ", " << packed << ", " << dst << ")");
+
+    vk_pipeline pipeline = ctx->device->pipeline_mhc_merge_f32;
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    const vk_subbuffer a_buf = ggml_vk_tensor_subbuffer(ctx, a,      true);
+    const vk_subbuffer b_buf = ggml_vk_tensor_subbuffer(ctx, b,      true);
+    const vk_subbuffer x_buf = ggml_vk_tensor_subbuffer(ctx, x,      true);
+    const vk_subbuffer p_buf = ggml_vk_tensor_subbuffer(ctx, packed, true);
+    const vk_subbuffer d_buf = ggml_vk_tensor_subbuffer(ctx, dst,    true);
+
+    vk_op_mhc_merge_push_constants pc = {
+        ggml_vk_nb_elem(a, 1), ggml_vk_nb_elem(a, 2),
+        ggml_vk_nb_elem(b, 1), ggml_vk_nb_elem(b, 2),
+        ggml_vk_nb_elem(x, 1), ggml_vk_nb_elem(x, 2),
+        ggml_vk_nb_elem(packed, 1), ggml_vk_nb_elem(packed, 2),
+        (uint32_t) a->ne[0], (uint32_t) a->ne[1], (uint32_t) a->ne[2],
+    };
+    init_pushconst_tensor_offsets(ctx, pc, a, b, x, packed, dst);
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a_buf, b_buf, x_buf, p_buf, d_buf }, pc, { (uint32_t) a->ne[0], (uint32_t) a->ne[1], (uint32_t) a->ne[2] });
 }
 
 void ggml_vk_dsv4_hc_pre(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * weights, ggml_tensor * dst) {
@@ -13291,6 +13345,12 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
         ggml_vk_cumsum(ctx, compute_ctx, src0, node);
 
         break;
+    case GGML_OP_MHC_ROUTE:
+        ggml_vk_mhc_route(ctx, compute_ctx, node->src[0], node->src[1], node->src[2], node->src[3], node);
+        break;
+    case GGML_OP_MHC_MERGE:
+        ggml_vk_mhc_merge(ctx, compute_ctx, node->src[0], node->src[1], node->src[2], node->src[3], node);
+        break;
     case GGML_OP_DSV4_HC_COMB:
         ggml_vk_dsv4_hc_comb(ctx, compute_ctx, src0, src1, src2, node);
 
@@ -16765,6 +16825,24 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_SSM_CONV:
             return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_MHC_ROUTE:
+        case GGML_OP_MHC_MERGE:
+            {
+                if (op->type != GGML_TYPE_F32) {
+                    return false;
+                }
+                // these two ops take exactly four sources
+                for (uint32_t i = 0; i < 4; ++i) {
+                    if (op->src[i] == nullptr || op->src[i]->type != GGML_TYPE_F32) {
+                        return false;
+                    }
+                    if (op->src[i]->nb[0] != sizeof(float)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_COL2IM_1D:

@@ -748,6 +748,20 @@ struct vk_op_ssm_conv_push_constants {
     uint32_t nc, ncs, nr, n_t, n_s;
 };
 
+struct vk_op_mhc_route_push_constants {
+    uint32_t nb_a1; uint32_t nb_a2; uint32_t pad_a;
+    uint32_t nb_b1; uint32_t nb_b2; uint32_t pad_b;
+    uint32_t n_d; uint32_t n_tok; uint32_t n_str;
+};
+
+struct vk_op_mhc_merge_push_constants {
+    uint32_t nb_a1; uint32_t nb_a2;
+    uint32_t nb_b1; uint32_t nb_b2;
+    uint32_t nb_x1; uint32_t nb_x2;
+    uint32_t nb_p1; uint32_t nb_p2;
+    uint32_t n_d; uint32_t n_tok; uint32_t n_str;
+};
+
 struct vk_op_conv2d_push_constants {
     uint32_t Cout;
     uint32_t Cin;

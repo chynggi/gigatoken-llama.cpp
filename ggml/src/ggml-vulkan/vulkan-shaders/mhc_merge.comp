@@ -1,0 +1,51 @@
+#version 450
+
+// Mix the two residual streams with the router's 2x2 matrix and add the sublayer output to each.
+// Pure elementwise work, one thread per output element.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter {
+    uint nb_a1; uint nb_a2;
+    uint nb_b1; uint nb_b2;
+    uint nb_x1; uint nb_x2;
+    uint nb_p1; uint nb_p2;
+    uint n_d; uint n_tok; uint n_str;
+} pc;
+
+layout(binding = 0, std430) readonly buffer A { float data_a[]; };
+layout(binding = 1, std430) readonly buffer B { float data_b[]; };
+layout(binding = 2, std430) readonly buffer X { float data_x[]; };
+layout(binding = 3, std430) readonly buffer P { float data_p[]; };
+layout(binding = 4, std430) buffer D { float data_d[]; };
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    const uint t = gl_GlobalInvocationID.y;
+    const uint s = gl_GlobalInvocationID.z;
+    const uint d = pc.n_d;
+
+    if (i >= d) {
+        return;
+    }
+
+    const uint off_a = (t*pc.nb_a1 + s*pc.nb_a2);
+    const uint off_b = (t*pc.nb_b1 + s*pc.nb_b2);
+    const uint off_x = (t*pc.nb_x1 + s*pc.nb_x2);
+    const uint off_p = (t*pc.nb_p1 + s*pc.nb_p2);
+    const uint off_d = t*2u*d + s*pc.n_tok*2u*d;
+
+    const float post0 = data_p[off_p + d + 0u];
+    const float post1 = data_p[off_p + d + 1u];
+    const float m00   = data_p[off_p + d + 2u];
+    const float m01   = data_p[off_p + d + 3u];
+    const float m10   = data_p[off_p + d + 4u];
+    const float m11   = data_p[off_p + d + 5u];
+
+    const float va = data_a[off_a + i];
+    const float vb = data_b[off_b + i];
+    const float vx = data_x[off_x + i];
+
+    data_d[off_d + i]     = m00*va + m01*vb + post0*vx;
+    data_d[off_d + d + i] = m10*va + m11*vb + post1*vx;
+}

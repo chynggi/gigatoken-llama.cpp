@@ -279,6 +279,11 @@ struct llama_layer {
     struct ggml_tensor * attn_kv_a_norm  = nullptr;
     struct ggml_tensor * attn_sub_norm   = nullptr;
     struct ggml_tensor * attn_post_norm  = nullptr;
+    // sense nova loop residual routers (fp32 logits: 2*streams gates plus a streams x streams mix)
+    struct ggml_tensor * mhc_attn_w      = nullptr;
+    struct ggml_tensor * mhc_attn_b      = nullptr;
+    struct ggml_tensor * mhc_ffn_w       = nullptr;
+    struct ggml_tensor * mhc_ffn_b       = nullptr;
     struct ggml_tensor * ffn_sub_norm    = nullptr;
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
@@ -1069,6 +1074,10 @@ struct llama_model_base : public llama_model {
     virtual ~llama_model_base() = default;
 
     ggml_tensor * create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+    ggml_tensor * create_tensor_impl(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+
+    // tensors of a re-entered loop block resolve to the first visit's tensors
+    std::unordered_map<std::string, ggml_tensor *> loop_shared;
 
     // convenience overload of create_tensor that doesn't require llama_model_loader
     ggml_tensor * create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);

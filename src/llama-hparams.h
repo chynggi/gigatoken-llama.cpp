@@ -208,6 +208,14 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_recr_impl;
 
     // for State Space Models
+    // sense nova loop: residual stream routers
+    uint32_t n_mhc_streams = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> mhc_layer_kinds{};
+    // the loop block of this architecture is stored once and executed twice: virtual blocks at or
+    // past mhc_loop_start2 map back to their first visit's tensors
+    uint32_t mhc_loop_start2 = 0;
+    uint32_t mhc_loop_shift  = 0;
+
     uint32_t ssm_d_conv  = 0;
     uint32_t ssm_d_inner = 0;
     uint32_t ssm_d_state = 0;

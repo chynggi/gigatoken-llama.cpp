@@ -430,6 +430,18 @@ class TensorNameMap:
             "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
         ),
 
+        MODEL_TENSOR.MHC_ATTN_W: (
+            "model.layers.{bid}.mhc_attn.weight",                # sensenova loop residual router
+        ),
+        MODEL_TENSOR.MHC_ATTN_B: (
+            "model.layers.{bid}.mhc_attn.bias",
+        ),
+        MODEL_TENSOR.MHC_FFN_W: (
+            "model.layers.{bid}.mhc_ffn.weight",
+        ),
+        MODEL_TENSOR.MHC_FFN_B: (
+            "model.layers.{bid}.mhc_ffn.bias",
+        ),
         MODEL_TENSOR.ATTN_POST_NORM: (
             "model.layers.{bid}.post_attention_layernorm",       # gemma2 olmo2    # ge
             "layers.{bid}.post_attention_layernorm",             # embeddinggemma

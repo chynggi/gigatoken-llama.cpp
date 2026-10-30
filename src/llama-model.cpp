@@ -358,6 +358,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen35moe(params);
         case LLM_ARCH_CLEF:
             return new llama_model_clef(params);
+        case LLM_ARCH_SENSENOVA_LOOP:
+            return new llama_model_sensenova_loop(params);
         case LLM_ARCH_VLLM_DECISION2:
             return new llama_model_vllm_decision2(params);
         case LLM_ARCH_CLOVER_MOE:
@@ -2511,6 +2513,14 @@ void llama_model_base::load_tensors_hadamard() {
 }
 
 ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+    // A re-entered loop block owns no weights of its own: every one of its tensors is the first
+    // visit's tensor, byte for byte. Sharing the pointer here instead of loading a second copy
+    // needs the loader's tensor list to dedupe as well, otherwise the buffer is sized for both
+    // copies and the VRAM saving never appears. Until that lands, load the duplicate.
+    return create_tensor_impl(ml, tn, ne, flags);
+}
+
+ggml_tensor * llama_model_base::create_tensor_impl(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
     const buft_list_t * buft_list_layer = nullptr;
     if (tn.bid != -1) {
         // blocks that are not model layers (e.g. the blocks of a head) go with the output
@@ -3876,6 +3886,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_CLEF:
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_QWEN3TTS:
             return LLAMA_ROPE_TYPE_IMROPE;

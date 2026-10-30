@@ -358,9 +358,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
 
-    // do not quantize Mamba/Kimi's small conv1d weights
-    // NOTE: can't use LLM_TN here because the layer number is not known
-    quantize &= name.find("ssm_conv1d") == std::string::npos;
+    // NOTE: ssm_conv1d is deliberately not excluded here. It has to keep its own type, which
+    // llama_tensor_get_type pins to F32 because ssm_conv reads an F32 kernel. Excluding it in this
+    // predicate is what silently left it at the source file's f16 and tripped the op's assertion.
     quantize &= name.find("shortconv.conv.weight") == std::string::npos;
 
     // do not quantize LFM3-VL's depthwise conv kernels, CONV_2D_DW takes F32 kernels
@@ -534,6 +534,11 @@ static double bits_per_weight(ggml_type t) {
 static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
     const std::string name = ggml_get_name(tensor);
 
+    // ssm_conv reads an F32 kernel: anything narrower trips its assertion at inference
+    if (name.find("ssm_conv1d") != std::string::npos) {
+        return GGML_TYPE_F32;
+    }
+
     // TODO: avoid hardcoded tensor names - use the TN_* constants
     const llm_arch arch = qs.model.arch;
 
@@ -556,6 +561,11 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         }
         return std::make_pair(i_layer, n_layer);
     };
+
+    // sense nova loop: the residual routers route in fp32, keep them exact
+    if (arch == LLM_ARCH_SENSENOVA_LOOP && name.find("mhc_") != std::string::npos) {
+        return GGML_TYPE_F32;
+    }
 
     // by default, for glm5-next, don't let these tensors be quantized below Q8_0
     if (arch == LLM_ARCH_GLM5_NEXT && (
@@ -845,6 +855,10 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
 
 // outer wrapper: determine the ggml_type that this tensor should be quantized to
 static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
+    // ssm_conv reads an F32 kernel: keep it F32 whatever the source file holds
+    if (std::string(tensor->name).find("ssm_conv1d") != std::string::npos) {
+        return GGML_TYPE_F32;
+    }
     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) {
         return tensor->type;
     }

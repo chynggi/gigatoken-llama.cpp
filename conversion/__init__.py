@@ -18,6 +18,7 @@ __all__ = [
 
 TEXT_MODEL_MAP: dict[str, str] = {
     "NEOChatModel": "sensenova_u1",
+    "SenseNovaLoopForConditionalGeneration": "sensenova",
     "AfmoeForCausalLM": "afmoe",
     "LagunaForCausalLM": "laguna",
     "RicursiveForCausalLM": "ricursive",

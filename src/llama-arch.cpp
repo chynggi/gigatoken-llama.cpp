@@ -45,6 +45,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN35,           "qwen35"           },
     { LLM_ARCH_QWEN35MOE,        "qwen35moe"        },
     { LLM_ARCH_CLEF,             "clef"             },
+    { LLM_ARCH_SENSENOVA_LOOP,   "sensenova_loop"   },
     { LLM_ARCH_VLLM_DECISION2,   "vllm-decision2"   },
     { LLM_ARCH_QWEN4EXP,         "qwen4exp"         },
     { LLM_ARCH_PHI2,             "phi2"             },
@@ -403,6 +404,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SPLIT_COUNT,         "split.count"         },
     { LLM_KV_SPLIT_TENSORS_COUNT, "split.tensors.count" },
 
+    { LLM_KV_MHC_STREAMS,        "%s.mhc.streams"        },
+    { LLM_KV_MHC_LAYER_KINDS,    "%s.mhc.layer_kinds"    },
     { LLM_KV_SSM_CONV_KERNEL,    "%s.ssm.conv_kernel"    },
     { LLM_KV_SSM_INNER_SIZE,     "%s.ssm.inner_size"     },
     { LLM_KV_SSM_STATE_SIZE,     "%s.ssm.state_size"     },
@@ -677,6 +680,10 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ROPE_FACTORS_SHORT,                     "rope_factors_short" },
     { LLM_TENSOR_SSM_X,                                  "blk.%d.ssm_x" },
     { LLM_TENSOR_SSM_A,                                  "blk.%d.ssm_a" },
+    { LLM_TENSOR_MHC_ATTN_W,                            "blk.%d.mhc_attn.weight" },
+    { LLM_TENSOR_MHC_ATTN_B,                            "blk.%d.mhc_attn.bias" },
+    { LLM_TENSOR_MHC_FFN_W,                             "blk.%d.mhc_ffn.weight" },
+    { LLM_TENSOR_MHC_FFN_B,                             "blk.%d.mhc_ffn.bias" },
     { LLM_TENSOR_SSM_D,                                  "blk.%d.ssm_d" },
     { LLM_TENSOR_SSM_DT_NORM,                            "blk.%d.ssm_dt_norm" },
     { LLM_TENSOR_SSM_B_NORM,                             "blk.%d.ssm_b_norm" },
@@ -1097,6 +1104,10 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_FFN_ACT,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_DIV}},
     {LLM_TENSOR_SSM_CONV1D,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
     {LLM_TENSOR_SSM_A,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_SCAN}},
+    {LLM_TENSOR_MHC_ATTN_W,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_MHC_ATTN_B,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
+    {LLM_TENSOR_MHC_FFN_W,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_MHC_FFN_B,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
     {LLM_TENSOR_SSM_A_NOSCAN,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}}, // a version of SSM_A used for MUL instead of SSM_SCAN
     {LLM_TENSOR_SSM_DT_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_SSM_B_NORM,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1437,6 +1448,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_MINIMAX_01:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_SENSENOVA_LOOP:
             return true;
         default:
             return false;
@@ -1464,6 +1476,7 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_QWEN4EXP:
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_DEEPSEEK41:
         case LLM_ARCH_GLM5_NEXT:

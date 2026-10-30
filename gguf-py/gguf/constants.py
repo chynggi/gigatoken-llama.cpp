@@ -332,6 +332,10 @@ class Keys:
         ROUTE_LENGTH             = "{arch}.metis.route_length"
         CONTINUATION_LOGIT_LIMIT = "{arch}.metis.continuation_logit_limit"
 
+    class MHC:
+        STREAMS        = "{arch}.mhc.streams"
+        LAYER_KINDS    = "{arch}.mhc.layer_kinds"
+
     class SSM:
         CONV_KERNEL    = "{arch}.ssm.conv_kernel"
         INNER_SIZE     = "{arch}.ssm.inner_size"
@@ -636,6 +640,7 @@ class MODEL_ARCH(IntEnum):
     QWEN3VL          = auto()
     QWEN3VLMOE       = auto()
     QWEN35           = auto()
+    SENSENOVA_LOOP   = auto()
     QWEN35MOE        = auto()
     CLEF             = auto()
     VLLM_DECISION2   = auto()
@@ -934,6 +939,10 @@ class MODEL_TENSOR(IntEnum):
     SSM_X                = auto()
     SSM_DT               = auto()
     SSM_DT_NORM          = auto()
+    MHC_ATTN_W           = auto()
+    MHC_ATTN_B           = auto()
+    MHC_FFN_W            = auto()
+    MHC_FFN_B            = auto()
     SSM_A                = auto()
     SSM_B_NORM           = auto()
     SSM_C_NORM           = auto()
@@ -1586,6 +1595,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN3VL:          "qwen3vl",
     MODEL_ARCH.QWEN3VLMOE:       "qwen3vlmoe",
     MODEL_ARCH.QWEN35:           "qwen35",
+    MODEL_ARCH.SENSENOVA_LOOP:   "sensenova_loop",
     MODEL_ARCH.QWEN35MOE:        "qwen35moe",
     MODEL_ARCH.CLEF:             "clef",
     MODEL_ARCH.VLLM_DECISION2:   "vllm-decision2",
@@ -1884,6 +1894,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_DT:                    "blk.{bid}.ssm_dt",
     MODEL_TENSOR.SSM_DT_NORM:               "blk.{bid}.ssm_dt_norm",
     MODEL_TENSOR.SSM_A:                     "blk.{bid}.ssm_a",
+    MODEL_TENSOR.MHC_ATTN_W:               "blk.{bid}.mhc_attn.weight",
+    MODEL_TENSOR.MHC_ATTN_B:               "blk.{bid}.mhc_attn.bias",
+    MODEL_TENSOR.MHC_FFN_W:                "blk.{bid}.mhc_ffn.weight",
+    MODEL_TENSOR.MHC_FFN_B:                "blk.{bid}.mhc_ffn.bias",
     MODEL_TENSOR.SSM_B_NORM:                "blk.{bid}.ssm_b_norm",
     MODEL_TENSOR.SSM_C_NORM:                "blk.{bid}.ssm_c_norm",
     MODEL_TENSOR.SSM_D:                     "blk.{bid}.ssm_d",
@@ -3511,6 +3525,43 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.SENSENOVA_LOOP: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.CLS_OUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_OUT,
+        # NextN/MTP tensors - preserved but unused
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+            MODEL_TENSOR.MHC_ATTN_W,
+        MODEL_TENSOR.MHC_ATTN_B,
+        MODEL_TENSOR.MHC_FFN_W,
+        MODEL_TENSOR.MHC_FFN_B,
     ],
     MODEL_ARCH.CLEF: [
         MODEL_TENSOR.TOKEN_EMBD,

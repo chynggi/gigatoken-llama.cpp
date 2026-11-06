@@ -25,9 +25,9 @@ import { remToPx } from '$lib/utils/css';
 class UiStore {
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
 	composerFocusRequested = $state(false);
-
 	/** Repo the Discover dialog selects when it opens, set by a model row. */
 	discoverModelFocus = $state<string | null>(null);
+
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
 
@@ -38,11 +38,14 @@ class UiStore {
 	modelDetailsFocus = $state<string | null>(null);
 	/** Route the models page returns to: the last page visited before it. */
 	modelsReturnRoute: string = ROUTES.START;
+
 	/** Bumped to close every open models selector; a counter, so no selector has to reset it. */
 	modelsSelectorCloseSignal = $state(0);
+
+	settingsDialogOpen = $state(false);
+	settingsSection = $state<string | undefined>(undefined);
 	/** Expanded desktop sidebar width in px; null keeps the stylesheet default. */
 	sidebarWidth = $state<number | null>(this.loadSidebarWidth());
-
 	#isSidebarExpanded = $state(this.loadSidebarExpanded());
 
 	/** Whether Discover is turned on; every Discover entry point hides without it. */
@@ -109,6 +112,11 @@ class UiStore {
 		if (this.isModelsPageOpen) return;
 
 		void goto(ROUTES.MODELS);
+	}
+
+	openSettings(section?: string): void {
+		this.settingsSection = section;
+		this.settingsDialogOpen = true;
 	}
 
 	/** Remember the current route as the models page's way back, unless it is that page. */

@@ -19,6 +19,7 @@ import {
 import { SyncableParameterType } from '$lib/enums';
 import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { ColorMode } from '$lib/enums/ui.enums';
+import { FORK_DISPLAY_SETTINGS, FORK_SETTINGS_REGISTRY } from '$lib/fork/settings/fork-sections';
 import type {
 	SettingsConfigValue,
 	SettingsEntry,
@@ -689,6 +690,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		title: SETTINGS_SECTION_TITLES.DEVELOPER
 	}
 ];
+
+for (const section of SETTINGS_REGISTRY) {
+	if (section.slug === SETTINGS_SECTION_SLUGS.DISPLAY) {
+		section.settings.push(...FORK_DISPLAY_SETTINGS);
+	}
+}
+SETTINGS_REGISTRY.push(...Object.values(FORK_SETTINGS_REGISTRY));
 
 function getAllSettings(): SettingsEntry[] {
 	const result: SettingsEntry[] = [];

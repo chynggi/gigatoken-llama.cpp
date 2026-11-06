@@ -1,19 +1,17 @@
-import { describe, it, expect } from 'vitest';
 import {
 	buildCommandPaletteItems,
 	filterCommandPaletteItems,
 	groupCommandPaletteItems
 } from '$lib/fork/command-palette/command-palette-commands';
+import { describe, expect, it } from 'vitest';
 
 const routes = {
-	start: '#/',
+	chatHref: (id: string) => `#/chat/${id}`,
 	newChat: '?new_chat=true#/',
-	settings: '#/settings',
-	settingsPacks: '#/settings/packs',
-	skills: '#/skills',
 	presets: '#/presets',
 	searchProviders: '#/search-providers',
-	chatHref: (id: string) => `#/chat/${id}`
+	skills: '#/skills',
+	start: '#/'
 };
 
 describe('buildCommandPaletteItems', () => {
@@ -21,43 +19,50 @@ describe('buildCommandPaletteItems', () => {
 		const items = buildCommandPaletteItems({
 			conversations: [
 				{ id: '1', name: 'Open me' },
-				{ id: '2', name: 'Hidden', archived: true }
+				{ archived: true, id: '2', name: 'Hidden' }
 			],
-			skillsEnabled: false,
-			skills: [],
-			presetsEnabled: false,
 			presets: [],
-			webSearchEnabled: false,
-			routes
+			presetsEnabled: false,
+			routes,
+			skills: [],
+			skillsEnabled: false,
+			webSearchEnabled: false
 		});
-
 		const labels = items.map((i) => i.label);
+
 		expect(labels).toContain('Open me');
 		expect(labels).not.toContain('Hidden');
 		expect(labels).toContain('Settings');
+		expect(items.find((i) => i.id === 'settings-general')?.action).toEqual({
+			type: 'open-settings'
+		});
+		expect(items.find((i) => i.id === 'settings-packs')?.action).toEqual({
+			section: 'packs',
+			type: 'open-settings'
+		});
 		expect(labels).toContain('New conversation');
 		expect(items.find((i) => i.id === 'conv-1')?.action).toEqual({
-			type: 'goto',
-			href: '#/chat/1'
+			href: '#/chat/1',
+			type: 'goto'
 		});
 	});
 
 	it('adds skill compose actions when skills enabled', () => {
 		const items = buildCommandPaletteItems({
 			conversations: [],
-			skillsEnabled: true,
-			skills: [{ id: 's1', name: 'summarize', description: 'Sum it' }],
-			presetsEnabled: false,
 			presets: [],
-			webSearchEnabled: false,
-			routes
+			presetsEnabled: false,
+			routes,
+			skills: [{ description: 'Sum it', id: 's1', name: 'summarize' }],
+			skillsEnabled: true,
+			webSearchEnabled: false
 		});
-
 		const skill = items.find((i) => i.id === 'skill-s1');
+
 		expect(skill?.action).toEqual({
-			type: 'compose',
+			href: '#/',
 			text: '/summarize ',
-			href: '#/'
+			type: 'compose'
 		});
 		expect(items.some((i) => i.id === 'manage-skills')).toBe(true);
 	});
@@ -65,17 +70,17 @@ describe('buildCommandPaletteItems', () => {
 	it('adds preset apply and web search manage when enabled', () => {
 		const items = buildCommandPaletteItems({
 			conversations: [],
-			skillsEnabled: false,
-			skills: [],
-			presetsEnabled: true,
 			presets: [{ id: 'p1', name: 'Coding' }],
-			webSearchEnabled: true,
-			routes
+			presetsEnabled: true,
+			routes,
+			skills: [],
+			skillsEnabled: false,
+			webSearchEnabled: true
 		});
 
 		expect(items.find((i) => i.id === 'preset-p1')?.action).toEqual({
-			type: 'apply-preset',
-			presetId: 'p1'
+			presetId: 'p1',
+			type: 'apply-preset'
 		});
 		expect(items.some((i) => i.id === 'manage-search-providers')).toBe(true);
 	});
@@ -84,12 +89,12 @@ describe('buildCommandPaletteItems', () => {
 describe('filterCommandPaletteItems / groupCommandPaletteItems', () => {
 	const items = buildCommandPaletteItems({
 		conversations: [{ id: '1', name: 'Alpha chat' }],
-		skillsEnabled: true,
-		skills: [{ id: 's', name: 'translate', description: 'lang tools' }],
-		presetsEnabled: false,
 		presets: [],
-		webSearchEnabled: false,
-		routes
+		presetsEnabled: false,
+		routes,
+		skills: [{ description: 'lang tools', id: 's', name: 'translate' }],
+		skillsEnabled: true,
+		webSearchEnabled: false
 	});
 
 	it('filters by label and description', () => {
@@ -100,6 +105,7 @@ describe('filterCommandPaletteItems / groupCommandPaletteItems', () => {
 
 	it('groups by category', () => {
 		const groups = groupCommandPaletteItems(items);
+
 		expect(groups['Conversations']?.length).toBe(1);
 		expect(groups['Skills']?.length).toBe(1);
 		expect(groups['Navigation']?.length).toBeGreaterThan(0);

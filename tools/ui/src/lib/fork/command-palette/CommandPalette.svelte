@@ -1,32 +1,32 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { Search, Zap, Sliders, Globe, MessageSquare } from '@lucide/svelte';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { conversationsStore, settingsStore } from '$lib/stores';
-	import { FORK_ROUTES } from '$lib/fork/routes';
-	import { skillsStore } from '$lib/fork/packs/skills.svelte';
-	import { presetsStore } from '$lib/fork/packs/presets.svelte';
-	import { RouterService } from '$lib/services/router.service';
-	import { ROUTES } from '$lib/constants';
-	import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
+	import { Globe, MessageSquare, Search, Sliders, Zap } from '@lucide/svelte';
 	import { browser } from '$app/environment';
-	import { onMount } from 'svelte';
-	import { setPendingComposeText } from '$lib/fork/command-palette/compose-draft';
+	import { goto } from '$app/navigation';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { ROUTES } from '$lib/constants';
 	import {
 		buildCommandPaletteItems,
-		filterCommandPaletteItems,
-		groupCommandPaletteItems,
 		type CommandPaletteIconId,
-		type CommandPaletteItemDesc
+		type CommandPaletteItemDesc,
+		filterCommandPaletteItems,
+		groupCommandPaletteItems
 	} from '$lib/fork/command-palette/command-palette-commands';
+	import { setPendingComposeText } from '$lib/fork/command-palette/compose-draft';
+	import { presetsStore } from '$lib/fork/packs/presets.svelte';
+	import { skillsStore } from '$lib/fork/packs/skills.svelte';
+	import { FORK_ROUTES } from '$lib/fork/routes';
+	import { FORK_SETTINGS_KEYS } from '$lib/fork/settings/keys';
+	import { RouterService } from '$lib/services/router.service';
+	import { conversationsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { Component } from 'svelte';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(false), onOpenChange }: Props = $props();
+	let { onOpenChange, open = $bindable(false) }: Props = $props();
 
 	let searchQuery = $state('');
 	let selectedIndex = $state(0);
@@ -37,39 +37,37 @@
 	);
 
 	const ICON_MAP: Record<CommandPaletteIconId, Component> = {
-		message: MessageSquare,
-		zap: Zap,
-		sliders: Sliders,
 		globe: Globe,
-		search: Search
+		message: MessageSquare,
+		search: Search,
+		sliders: Sliders,
+		zap: Zap
 	};
 
 	let allCommands = $derived.by((): CommandPaletteItemDesc[] =>
 		buildCommandPaletteItems({
 			conversations: conversationsStore.conversations.map((c) => ({
+				archived: c.archived,
 				id: c.id,
-				name: c.name,
-				archived: c.archived
+				name: c.name
 			})),
-			skillsEnabled: skillsStore.enabled,
-			skills: skillsStore.skills.map((s) => ({
-				id: s.id,
-				name: s.name,
-				description: s.description
-			})),
-			presetsEnabled: presetsStore.enabled,
 			presets: presetsStore.presets.map((p) => ({ id: p.id, name: p.name })),
-			webSearchEnabled: Boolean(settingsStore.config[FORK_SETTINGS_KEYS.WEB_SEARCH_ENABLED]),
+			presetsEnabled: presetsStore.enabled,
 			routes: {
-				start: ROUTES.START,
+				chatHref: (id: string) => RouterService.chat(id),
 				newChat: ROUTES.NEW_CHAT,
-				settings: ROUTES.SETTINGS,
-				settingsPacks: `${ROUTES.SETTINGS}/packs`,
-				skills: FORK_ROUTES.SKILLS,
 				presets: FORK_ROUTES.PRESETS,
 				searchProviders: FORK_ROUTES.SEARCH_PROVIDERS,
-				chatHref: (id: string) => RouterService.chat(id)
-			}
+				skills: FORK_ROUTES.SKILLS,
+				start: ROUTES.START
+			},
+			skills: skillsStore.skills.map((s) => ({
+				description: s.description,
+				id: s.id,
+				name: s.name
+			})),
+			skillsEnabled: skillsStore.enabled,
+			webSearchEnabled: Boolean(settingsStore.config[FORK_SETTINGS_KEYS.WEB_SEARCH_ENABLED])
 		})
 	);
 
@@ -93,15 +91,27 @@
 
 	function runAction(cmd: CommandPaletteItemDesc) {
 		const action = cmd.action;
+
+		if (action.type === 'open-settings') {
+			uiStore.openSettings(action.section);
+
+			return;
+		}
+
 		if (action.type === 'goto') {
 			goto(action.href);
+
 			return;
 		}
+
 		if (action.type === 'compose') {
 			setPendingComposeText(action.text);
+
 			if (action.href) goto(action.href);
+
 			return;
 		}
+
 		if (action.type === 'apply-preset') {
 			presetsStore.applyPreset(action.presetId);
 		}
@@ -123,6 +133,7 @@
 		} else if (e.key === 'Enter') {
 			e.preventDefault();
 			const cmd = filteredCommands[selectedIndex];
+
 			if (cmd) handleSelect(cmd);
 		} else if (e.key === 'Escape') {
 			open = false;
@@ -132,9 +143,11 @@
 
 	function handleGlobalKeydown(e: KeyboardEvent) {
 		if (!paletteEnabled) return;
+
 		if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
 			e.preventDefault();
 			open = !open;
+
 			if (!open) onOpenChange?.(false);
 		}
 	}
@@ -143,6 +156,7 @@
 		if (browser) {
 			document.addEventListener('keydown', handleGlobalKeydown);
 		}
+
 		return () => {
 			if (browser) {
 				document.removeEventListener('keydown', handleGlobalKeydown);
@@ -156,21 +170,23 @@
 		<Dialog.Content class="sm:max-w-lg p-0 gap-0">
 			<div class="flex items-center border-b px-3">
 				<Search class="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+
 				<input
 					bind:this={inputRef}
 					bind:value={searchQuery}
 					class="flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground"
-					placeholder="Search conversations, skills, presets..."
 					onkeydown={handleKeydown}
+					placeholder="Search conversations, skills, presets..."
 				/>
 			</div>
 
 			<div class="max-h-80 overflow-y-auto p-1">
-				{#each Object.entries(groupedCommands) as [category, commands]}
+				{#each Object.entries(groupedCommands) as [category, commands] (category)}
 					<div class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
 						{category}
 					</div>
-					{#each commands as cmd}
+
+					{#each commands as cmd (cmd.id)}
 						{@const globalIdx = filteredCommands.indexOf(cmd)}
 						{@const Icon = ICON_MAP[cmd.icon]}
 						<button
@@ -181,7 +197,9 @@
 							onclick={() => handleSelect(cmd)}
 						>
 							<Icon class="h-4 w-4 shrink-0 text-muted-foreground" />
+
 							<span class="flex-1 truncate">{cmd.label}</span>
+
 							{#if cmd.description}
 								<span class="text-xs text-muted-foreground truncate max-w-[40%]"
 									>{cmd.description}</span
@@ -200,9 +218,11 @@
 				<span class="flex items-center gap-1">
 					<kbd class="rounded border bg-muted px-1 py-0.5 text-[10px]">Esc</kbd> close
 				</span>
+
 				<span class="flex items-center gap-1">
 					<kbd class="rounded border bg-muted px-1 py-0.5 text-[10px]">&#8593;&#8595;</kbd> navigate
 				</span>
+
 				<span class="flex items-center gap-1">
 					<kbd class="rounded border bg-muted px-1 py-0.5 text-[10px]">Enter</kbd> select
 				</span>

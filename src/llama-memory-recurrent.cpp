@@ -718,7 +718,7 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
             // the ubatch writes slots 0..n_seq_tokens-1 and does not shift the older ones, so only
             // rollbacks within it are valid (slot n_seq_tokens is the state before it, not kept)
             if (n_rs_seq != 0 && (size_t) seq_id < rs_valid.size()) {
-                rs_valid[seq_id] = std::min(n_rs_seq, n_seq_tokens - 1);
+                rs_valid[seq_id] = cell.rs_max;
             }
         }
     }

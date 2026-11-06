@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -410,6 +412,102 @@ struct case_rollback_bound : ctx_test {
     }
 };
 
+// snapshot slot r holds the state r tokens behind the head, and a ubatch of n tokens writes only
+// slots 0..n-1 without shifting the older ones. So only rollbacks of at most n-1 are valid.
+struct case_rollback_replay : ctx_test {
+    test_group group() const override { return TEST_GROUP_RS; }
+
+    const char * name() const override { return "bound"; }
+
+    const char * description() const override {
+        return "seq_rm refuses a rollback deeper than the snapshots of the last ubatch";
+    }
+
+    std::string skip_reason(model_run & mr) const override {
+        char arch_str[64] = {};
+        llama_model_meta_val_str(mr.model, "general.architecture", arch_str, sizeof(arch_str));
+        // FIXME: the DSV4 cache has its own rollback planes and does not bound seq_rm by them yet
+        if (strcmp(arch_str, "deepseek4") == 0 || strcmp(arch_str, "deepseek41") == 0) {
+            return "DSV4 rollback is not bounded yet";
+        }
+
+        return ctx_test::skip_reason(mr);
+    }
+
+    case_result run(model_run & mr) const override {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        const auto make_rs_ctx = [&]() {
+            ctx_opts opts;
+            opts.n_seq_max = 1;
+            opts.n_rs_seq  = 8;
+            return mr.ctx(opts);
+        };
+
+        llama_context_ptr ctx_roll = make_rs_ctx();
+        llama_context_ptr ctx_ref  = make_rs_ctx();
+        if (!ctx_roll || !ctx_ref) {
+            return case_result::fail();
+        }
+
+        constexpr uint32_t n_tail = 4;
+        if (llama_n_rs_seq(ctx_roll.get()) < n_tail) {
+            return case_result::skip("n_rs_seq is too small");
+        }
+
+        const auto tok = [&](llama_pos pos) {
+            return gen_token(n_vocab, 0, pos);
+        };
+
+        constexpr llama_pos n_prompt = 12;
+
+        // prompt, then two single-token ubatches
+        bool ok = true;
+        for (llama_context * ctx : { ctx_roll.get(), ctx_ref.get() }) {
+            ok = ok && decode_gen(ctx, n_vocab, 0, 0, n_prompt);
+            ok = ok && decode_one(ctx, tok(n_prompt),     n_prompt);
+            ok = ok && decode_one(ctx, tok(n_prompt + 1), n_prompt + 1);
+        }
+        CTX_REQUIRE(ok, "the prompt decode failed");
+
+        llama_memory_t mem = llama_get_memory(ctx_roll.get());
+
+        // slot 1 still holds a state from before the prompt tail
+        CTX_REQUIRE(!llama_memory_seq_rm(mem, 0, n_prompt + 1, -1), "rollback 1 after a single-token ubatch must be refused");
+        CTX_REQUIRE(llama_memory_seq_pos_max(mem, 0) == n_prompt + 1, "a refused rollback moved the position");
+
+        const llama_pos p_tail = n_prompt + 2;
+        ok = decode_gen(ctx_roll.get(), n_vocab, 0, p_tail, p_tail + n_tail) &&
+             decode_gen(ctx_ref.get(),  n_vocab, 0, p_tail, p_tail + 1);
+        CTX_REQUIRE(ok, "the tail decode failed");
+
+        // slot n_tail was not written by the tail ubatch
+        CTX_REQUIRE(!llama_memory_seq_rm(mem, 0, p_tail, -1), "rollback over the whole last ubatch must be refused");
+        CTX_REQUIRE(llama_memory_seq_rm(mem, 0, p_tail + 1, -1), "rollback of n_tail - 1 failed");
+
+        ok = decode_one(ctx_roll.get(), tok(p_tail + 1), p_tail + 1) &&
+             decode_one(ctx_ref.get(),  tok(p_tail + 1), p_tail + 1);
+        CTX_REQUIRE(ok, "the replay decode failed");
+
+        const float * l_roll = llama_get_logits_ith(ctx_roll.get(), 0);
+        const float * l_ref  = llama_get_logits_ith(ctx_ref.get(),  0);
+        if (l_roll == nullptr || l_ref == nullptr) {
+            TLOG_ERR("%s: missing replay logits\n", __func__);
+            return case_result::fail();
+        }
+
+        // the two contexts split the tokens into different ubatches, so allow the same drift as the replay case
+        constexpr float nmse_eps = 1e-4f;
+
+        const logits_diff diff = compare_logits(l_roll, l_ref, n_vocab);
+        CTX_REQUIRE(diff.nmse() <= nmse_eps, "replay after the bounded rollback mismatch, nmse " + std::to_string(diff.nmse()));
+
+        TLOG_INF("%s: rollback bound holds (max diff %g, nmse %g)\n", __func__, (double) diff.diff_max, diff.nmse());
+
+        return case_result::pass();
+    }
+};
+
 // seq_rm(-1, ...) is the "any sequence" wildcard: the whole range must succeed and leave the
 // context usable, a partial range must be refused. The unsigned seq_id compare used to reject
 // both, and clearing the cells without dropping the tails tripped find_slot on the next decode.
@@ -530,6 +628,7 @@ std::vector<ctx_test_ptr> make_rs_cases() {
 
     cases.push_back(std::make_unique<case_rollback>());
     cases.push_back(std::make_unique<case_rollback_bound>());
+    cases.push_back(std::make_unique<case_rollback_replay>());
     cases.push_back(std::make_unique<case_seq_rm_wildcard>());
     cases.push_back(std::make_unique<case_multi_seq_split_replay>());
     cases.push_back(std::make_unique<case_shared_seq_reserve>());

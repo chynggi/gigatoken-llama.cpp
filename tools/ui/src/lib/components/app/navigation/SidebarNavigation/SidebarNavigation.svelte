@@ -164,7 +164,6 @@
 	let selectedIds = new SvelteSet<string>();
 
 	let renameDialogOpen = $state(false);
-	let settingsDialogOpen = $state(false);
 	let mcpDialogOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
@@ -538,7 +537,7 @@
 
 				break;
 			case SidebarAction.SETTINGS:
-				openDialog(() => (settingsDialogOpen = true));
+				openDialog(() => uiStore.openSettings());
 
 				break;
 		}
@@ -646,8 +645,8 @@
 				? 'transition-[opacity,height] duration-200 ease-out'
 				: 'md:transition-opacity md:duration-150 md:ease-out'} {deviceStore.isMobile &&
 			!uiStore.isSidebarExpanded
-				? 'opacity-0 !h-0'
-				: ''} {isStripHidden ? 'md:opacity-0' : ''}"
+				? 'opacity-0 invisible !h-0'
+				: ''} {isStripHidden ? 'md:opacity-0 md:invisible' : ''}"
 		>
 			<SidebarNavigationActions
 				class="px-2"
@@ -733,7 +732,10 @@
 	onConfirm={handleDeleteConfirm}
 />
 
-<DialogSettingsChat bind:open={settingsDialogOpen} />
+<DialogSettingsChat
+	bind:open={uiStore.settingsDialogOpen}
+	initialSection={uiStore.settingsSection}
+/>
 
 <DialogSearch bind:open={searchOpen} onAction={handleSidebarAction} />
 

@@ -3,12 +3,7 @@
  * The shell component only wires navigation/store side effects.
  */
 
-export type CommandPaletteIconId =
-	| 'message'
-	| 'zap'
-	| 'sliders'
-	| 'globe'
-	| 'search';
+export type CommandPaletteIconId = 'message' | 'zap' | 'sliders' | 'globe' | 'search';
 
 export interface CommandPaletteItemDesc {
 	id: string;
@@ -19,6 +14,7 @@ export interface CommandPaletteItemDesc {
 	/** Discriminated action for the shell to execute */
 	action:
 		| { type: 'goto'; href: string }
+		| { type: 'open-settings'; section?: string }
 		| { type: 'compose'; text: string; href?: string }
 		| { type: 'apply-preset'; presetId: string };
 }
@@ -33,8 +29,6 @@ export interface CommandPaletteSources {
 	routes: {
 		start: string;
 		newChat: string;
-		settings: string;
-		settingsPacks: string;
 		skills: string;
 		presets: string;
 		searchProviders: string;
@@ -49,29 +43,30 @@ export function buildCommandPaletteItems(sources: CommandPaletteSources): Comman
 
 	for (const conv of sources.conversations) {
 		if (conv.archived) continue;
+
 		cmds.push({
-			id: `conv-${conv.id}`,
-			label: conv.name,
+			action: { href: routes.chatHref(conv.id), type: 'goto' },
+			category: 'Conversations',
 			description: 'Open conversation',
 			icon: 'message',
-			category: 'Conversations',
-			action: { type: 'goto', href: routes.chatHref(conv.id) }
+			id: `conv-${conv.id}`,
+			label: conv.name
 		});
 	}
 
 	if (sources.skillsEnabled) {
 		for (const skill of sources.skills) {
 			cmds.push({
-				id: `skill-${skill.id}`,
-				label: `/${skill.name}`,
+				action: {
+					href: routes.start,
+					text: `/${skill.name} `,
+					type: 'compose'
+				},
+				category: 'Skills',
 				description: skill.description,
 				icon: 'zap',
-				category: 'Skills',
-				action: {
-					type: 'compose',
-					text: `/${skill.name} `,
-					href: routes.start
-				}
+				id: `skill-${skill.id}`,
+				label: `/${skill.name}`
 			});
 		}
 	}
@@ -79,74 +74,74 @@ export function buildCommandPaletteItems(sources: CommandPaletteSources): Comman
 	if (sources.presetsEnabled) {
 		for (const preset of sources.presets) {
 			cmds.push({
-				id: `preset-${preset.id}`,
-				label: preset.name,
+				action: { presetId: preset.id, type: 'apply-preset' },
+				category: 'Presets',
 				description: 'Apply chat preset',
 				icon: 'sliders',
-				category: 'Presets',
-				action: { type: 'apply-preset', presetId: preset.id }
+				id: `preset-${preset.id}`,
+				label: preset.name
 			});
 		}
 	}
 
 	cmds.push({
-		id: 'settings-general',
-		label: 'Settings',
+		action: { type: 'open-settings' },
+		category: 'Navigation',
 		description: 'Open settings',
 		icon: 'sliders',
-		category: 'Navigation',
-		action: { type: 'goto', href: routes.settings }
+		id: 'settings-general',
+		label: 'Settings'
 	});
 
 	cmds.push({
-		id: 'settings-packs',
-		label: 'Packs settings',
+		action: { section: 'packs', type: 'open-settings' },
+		category: 'Navigation',
 		description: 'Enable optional features',
 		icon: 'globe',
-		category: 'Navigation',
-		action: { type: 'goto', href: routes.settingsPacks }
+		id: 'settings-packs',
+		label: 'Packs settings'
 	});
 
 	if (sources.skillsEnabled) {
 		cmds.push({
-			id: 'manage-skills',
-			label: 'Manage skills',
+			action: { href: routes.skills, type: 'goto' },
+			category: 'Navigation',
 			description: 'Edit skill templates',
 			icon: 'zap',
-			category: 'Navigation',
-			action: { type: 'goto', href: routes.skills }
+			id: 'manage-skills',
+			label: 'Manage skills'
 		});
 	}
 
 	if (sources.presetsEnabled) {
 		cmds.push({
-			id: 'manage-presets',
-			label: 'Manage presets',
+			action: { href: routes.presets, type: 'goto' },
+			category: 'Navigation',
 			description: 'Edit chat presets',
 			icon: 'sliders',
-			category: 'Navigation',
-			action: { type: 'goto', href: routes.presets }
+			id: 'manage-presets',
+			label: 'Manage presets'
 		});
 	}
 
 	if (sources.webSearchEnabled) {
 		cmds.push({
-			id: 'manage-search-providers',
-			label: 'Web search providers',
+			action: { href: routes.searchProviders, type: 'goto' },
+			category: 'Navigation',
 			description: 'Configure search providers',
 			icon: 'globe',
-			category: 'Navigation',
-			action: { type: 'goto', href: routes.searchProviders }
+			id: 'manage-search-providers',
+			label: 'Web search providers'
 		});
 	}
 
 	cmds.push({
-		id: 'new-chat',
-		label: 'New conversation',
+		action: { href: routes.newChat, type: 'goto' },
+		category: 'Navigation',
 		description: 'Start a fresh chat',
 		icon: 'message',
-		category: 'Navigation',
-		action: { type: 'goto', href: routes.newChat }
+		id: 'new-chat',
+		label: 'New conversation'
 	});
 
 	return cmds;
@@ -158,7 +153,9 @@ export function filterCommandPaletteItems(
 	query: string
 ): CommandPaletteItemDesc[] {
 	const q = query.toLowerCase().trim();
+
 	if (!q) return items;
+
 	return items.filter(
 		(c) =>
 			c.label.toLowerCase().includes(q) ||
@@ -172,9 +169,12 @@ export function groupCommandPaletteItems(
 	items: CommandPaletteItemDesc[]
 ): Record<string, CommandPaletteItemDesc[]> {
 	const groups: Record<string, CommandPaletteItemDesc[]> = {};
+
 	for (const cmd of items) {
 		if (!groups[cmd.category]) groups[cmd.category] = [];
+
 		groups[cmd.category].push(cmd);
 	}
+
 	return groups;
 }

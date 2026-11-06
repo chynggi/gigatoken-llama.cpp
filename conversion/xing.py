@@ -20,14 +20,14 @@ class Xing4_0Model(DeepseekV2Model):
 
     # NextN/MTP: the checkpoint appends the MTP block past num_hidden_layers
     # (model.layers.40 -> blk.40), mirroring DeepSeek-V3.2.  The C++ loader
-    # (src/models/xing4_0.cpp) expects the MTP block to carry the standard
+    # (src/models/xing4-0.cpp) expects the MTP block to carry the standard
     # MLA + MoE tensors plus nextn.eh_proj/enorm/hnorm (and optionally
     # embed_tokens/shared_head.*), but NO mHC tensors -- those are trunk-only.
     skip_mtp = False
     supports_mtp_export = True
     _n_main_layers: int | None = None
 
-# map (prefix, kind) -> MODEL_TENSOR enum
+    # map (prefix, kind) -> MODEL_TENSOR enum
     _hc_tensor_map = {
         ("hc_attn", "fn"):    gguf.MODEL_TENSOR.HC_ATTN_FN,
         ("hc_attn", "base"):  gguf.MODEL_TENSOR.HC_ATTN_BASE,
@@ -85,7 +85,7 @@ class Xing4_0Model(DeepseekV2Model):
                 self.rope_parameters["type"] = "yarn"
             # base.py's YARN branch accesses this with a direct key lookup
             self.rope_parameters.setdefault("original_max_position_embeddings",
-                self.hparams.get("original_max_position_embeddings", 4096))
+                                            self.hparams.get("original_max_position_embeddings", 4096))
 
         super().set_gguf_parameters()
         hparams = self.hparams

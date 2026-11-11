@@ -13,7 +13,7 @@ export const URL_PARAMS = {
 export const ROUTES = {
 	/** Chat base — for dynamic chat URLs use RouterService. */
 	CHAT: '#/chat',
-	/** MCP servers. */
+	/** MCP servers - a page on a phone, a dialog elsewhere. */
 	MCP_SERVERS: '#/mcp-servers',
 	/** New chat — root with new chat query param. */
 	NEW_CHAT: `?${URL_PARAMS.NEW_CHAT}=true#/`,
@@ -21,9 +21,17 @@ export const ROUTES = {
 	MODELS: '#/models',
 	/** Search — mobile-only full-page conversation search. */
 	SEARCH: '#/search',
+	/** Settings - a page on a phone, a dialog elsewhere. */
+	SETTINGS: '#/settings',
 	/** Root — start of the app. */
 	START: '#/'
 } as const;
 
 /** SvelteKit route id of the models manager, as `page.route.id` reports it. */
 export const MODELS_ROUTE_ID = '/models';
+
+/** SvelteKit route id of the MCP servers page, as `page.route.id` reports it. */
+export const MCP_SERVERS_ROUTE_ID = '/mcp-servers';
+
+/** SvelteKit route id of the settings page, as `page.route.id` reports it. */
+export const SETTINGS_ROUTE_ID = '/settings';

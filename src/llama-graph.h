@@ -170,7 +170,8 @@ public:
 
     ggml_tensor * tokens = nullptr; // I32 [n_batch]
     ggml_tensor * embd   = nullptr; // F32 [n_embd, n_batch]
-    ggml_tensor * h      = nullptr; // F32 [n_embd_state, n_batch]
+    ggml_tensor * h      = nullptr; // F32 [n_embd_state, n_batch], the host input or the rows gathered with h_rows
+    ggml_tensor * h_rows = nullptr; // I32 [n_batch], rows of the h_nextn device buffer of ctx_state_src, nullptr on the host path
 
     const int64_t n_embd       = 0;
     const int64_t n_embd_state = 0;
@@ -819,6 +820,8 @@ struct llm_graph_params {
 
     ggml_tensor * layer_inp_dev = nullptr; // own layer input device buffer (write)
     ggml_tensor * layer_inp_src = nullptr; // ctx_other's layer input device buffer (read)
+    ggml_tensor * h_nextn_dev   = nullptr; // own h_nextn device buffer (write)
+    ggml_tensor * h_nextn_src   = nullptr; // ctx_state_src's h_nextn device buffer (read)
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -914,6 +917,8 @@ struct llm_graph_params {
             cparams.causal_attn             == other.cparams.causal_attn             &&
             layer_inp_dev == other.layer_inp_dev &&
             layer_inp_src == other.layer_inp_src &&
+            h_nextn_dev   == other.h_nextn_dev   &&
+            h_nextn_src   == other.h_nextn_src   &&
             model == other.model &&
             gtype == other.gtype &&
             cvec  == other.cvec  &&
@@ -993,6 +998,7 @@ public:
     std::vector<ggml_tensor *> t_candidates;
 
     std::vector<std::pair<int, ggml_tensor *>> moe_sel_experts;
+    std::vector<ggml_tensor *> t_sampling_all;
 
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
@@ -1036,6 +1042,11 @@ struct llm_graph_qkv {
 struct llm_graph_amax_src1 {
     ggml_tensor * res;     // cur rescaled
     ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
+};
+
+struct llm_graph_moe_cache_slots {
+    ggml_tensor * slots;   // [n_expert_used, n_tokens] slots of the selected experts in the MoE cache, or nullptr
+    ggml_tensor * cpu_ids; // [n_expert_used, n_tokens] misses computed from the host experts, -1 for the other experts, or nullptr
 };
 
 struct llm_graph_context {
@@ -1095,6 +1106,8 @@ struct llm_graph_context {
 
     ggml_tensor * layer_inp_dev;
     ggml_tensor * layer_inp_src;
+    ggml_tensor * h_nextn_dev;
+    ggml_tensor * h_nextn_src;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1140,13 +1153,14 @@ struct llm_graph_context {
               ggml_tensor * w_s = nullptr) const;
 
     // do mat_mul_id, while optionally apply lora and per-expert scale
-    // if slots is set, the experts are read from the MoE cache at these slots (see build_moe_cache_slots)
+    // if slots is set, the experts are selected by slots instead of ids, from the MoE cache if cached (see build_moe_cache_slots)
     ggml_tensor * build_lora_mm_id(
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
-              ggml_tensor * w_s   = nullptr,
-              ggml_tensor * slots = nullptr) const;
+              ggml_tensor * w_s    = nullptr,
+              ggml_tensor * slots  = nullptr,
+                     bool   cached = true) const;
 
     // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
     // keep both individual values and Q8 activation block sums within F16 range
@@ -1259,12 +1273,14 @@ struct llm_graph_context {
                    float   post_exp_norm_eps = 1e-5f) const;
 
     // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
-    ggml_tensor * build_moe_cache_slots(
+    // with cpu_part, also the misses computed from the host experts, if the cache leaves any to the CPU
+    llm_graph_moe_cache_slots build_moe_cache_slots(
              ggml_tensor * selected_experts,
              ggml_tensor * up_exps,
              ggml_tensor * gate_exps,
              ggml_tensor * down_exps,
              ggml_tensor * gate_up_exps,
+                    bool   cpu_part,
                      int   il) const;
 
     //
@@ -1273,6 +1289,11 @@ struct llm_graph_context {
 
     // tok_scale: applied to token rows only
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd, float tok_scale = 1.0f) const;
+
+    // the state input of an MTP graph: rows of the h_nextn device buffer of ctx_state_src (see llama_set_embd_state_src()),
+    // or uploaded from ubatch.embd_state
+    ggml_tensor * build_inp_embd_state(llm_graph_input_embd_h * inp, int64_t n_embd_state) const;
+
     ggml_tensor * build_inp_pos() const;
 
     // applies the RoPE of layer il, cur is returned as is if the layer has none
@@ -1378,6 +1399,12 @@ struct llm_graph_context {
 
     // ggml_top_k_mask with top_k viewed in the row layout of kq_mask, see ggml.h
     ggml_tensor * build_fused_top_k_mask(
+            ggml_tensor * kq_mask, // [n_kv, n_tokens/n_stream, 1, n_stream]
+            ggml_tensor * top_k,   // [n_top, n_tokens]
+                    int   il) const;
+
+    // kq_mask with only the cells named by top_k left visible, for sparse attention
+    ggml_tensor * build_top_k_mask(
             ggml_tensor * kq_mask, // [n_kv, n_tokens/n_stream, 1, n_stream]
             ggml_tensor * top_k,   // [n_top, n_tokens]
                     int   il) const;
@@ -1519,6 +1546,9 @@ struct llm_graph_context {
 
     // write enabled layer inputs into layer_inp_dev at their batch rows
     void build_layer_inp_dev() const;
+
+    // write the unmasked h_nextn rows into h_nextn_dev at their batch rows
+    void build_h_nextn_dev() const;
 
     //
     // dense (out)

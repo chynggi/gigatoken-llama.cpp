@@ -374,6 +374,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_k3(params);
         case LLM_ARCH_RAON1:
             return new llama_model_raon1(params);
+        case LLM_ARCH_KIMI_K31:
+            return new llama_model_kimi_k31(params);
         case LLM_ARCH_GLM5_NEXT:
             return new llama_model_glm5_next(params);
         case LLM_ARCH_STEP35:
@@ -1698,8 +1700,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    // resolve AUTO on systems without mmap support (e.g. iGPUs): fall back to OFF; see #28160
-    if (ml.lazy.mode == LLAMA_LAZY_MODE_AUTO) {
+    // resolve AUTO on systems without mmap support (e.g. iGPUs): fall back to OFF unless mmap is in use; see #28160, #31943
+    if (ml.lazy.mode == LLAMA_LAZY_MODE_AUTO && !ml.use_mmap) {
         for (const auto & dev : devices) {
             ggml_backend_dev_props props;
             ggml_backend_dev_get_props(dev.dev, &props);
@@ -1813,6 +1815,16 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         // this avoids having to add scale loading to every architecture
         for (int i = 0; i < n_layer_all; ++i) {
             auto & layer = layers[i];
+
+            if (hparams.has_kv(i)) {
+                layer.k_cache_s = create_tensor(tn(LLM_TENSOR_ATTN_K, "k_scale", i), {1}, TENSOR_NOT_REQUIRED);
+                layer.v_cache_s = create_tensor(tn(LLM_TENSOR_ATTN_V, "v_scale", i), {1}, TENSOR_NOT_REQUIRED);
+
+                if ((layer.k_cache_s && layer.k_cache_s->type != GGML_TYPE_F32) ||
+                    (layer.v_cache_s && layer.v_cache_s->type != GGML_TYPE_F32)) {
+                    throw std::runtime_error(format("KV cache scales for layer %d must be F32", i));
+                }
+            }
 
             // attention weight scales (per-tensor, shape {1})
             if (!layer.wq_s && layer.wq) {
@@ -3285,8 +3297,20 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     // only the sparse-attention architectures use llama_memory_hybrid_idx
                     // a null filter_idx means the GGUF has no indexer tensors
                     llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
-                    const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP);
-                    if (arch == LLM_ARCH_FALCON_H1) {
+                    const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_KIMI_K31);
+                    if (arch == LLM_ARCH_KIMI_K31) {
+                        // DSA layers keep a K-only MLA cache plus a per-token indexer key cache,
+                        // the KDA layers stay recurrent
+                        filter_attn = [&](uint32_t il) {
+                            return il < hparams.n_layer() && !hparams.is_recr(il);
+                        };
+                        filter_recr = [&](uint32_t il) {
+                            return il < hparams.n_layer() && hparams.is_recr(il);
+                        };
+                        filter_idx = [&](uint32_t il) {
+                            return il < hparams.n_layer() && !hparams.is_recr(il) && hparams.is_indexer_full(il);
+                        };
+                    } else if (arch == LLM_ARCH_FALCON_H1) {
                         filter_attn = [&](uint32_t) { return true; };
                         filter_recr = [&](uint32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
@@ -3506,6 +3530,8 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
 
     llm->build_layer_inp_dev();
 
+    llm->build_h_nextn_dev();
+
     llm->res->set_outputs(params);
 
     return llm->res->get_gf();
@@ -3673,6 +3699,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_RAON1:
+        case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STARCODER:
             return LLAMA_ROPE_TYPE_NONE;

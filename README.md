@@ -12,7 +12,7 @@ Key features:
 - Concurrent cache hierarchies for long-tailed pretoken distributions
 - Support for all commonly used BPE tokenizers (GPT-2, Llama 3, Qwen, DeepSeek, etc.)
 
-![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
+![llama.cpp](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/logo/svg/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">
 

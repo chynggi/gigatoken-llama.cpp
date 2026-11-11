@@ -1870,7 +1870,12 @@ class TensorNameMap:
             "model.vision_model.embeddings.class_embedding", # Deepseek-OCR
         ),
 
+        MODEL_TENSOR.V_ENC_ROPE_FREQS: (
+            "visual.rope_freqs",
+        ),
+
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
+            "visual.embeddings.patch_embedding", # mage-vl
             "vision.patch_embed.proj", # deepseek4v
             "model.vision_tower.vision_model.embeddings.patch_embedding", # Granite4Vision
             "vision_tower.vision_model.embeddings.patch_embedding",
@@ -1940,6 +1945,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "visual.encoder.layers.{bid}.self_attn.qkv", # mage-vl
             "vision.blocks.{bid}.attn.wqkv", # deepseek4v
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "vision_tower.blocks.{bid}.attn.qkv", # dots.ocr
@@ -2036,6 +2042,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "visual.encoder.layers.{bid}.layer_norm1", # mage-vl
             "vision_model.encoder.layer.{bid}.norm1", # Nemotron Omni
             "vision.blocks.{bid}.norm1", # deepseek4v
             "model.vision_tower.vision_model.encoder.layers.{bid}.layer_norm1", # Granite4Vision
@@ -2064,6 +2071,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
+            "visual.encoder.layers.{bid}.self_attn.proj", # mage-vl
             "vision_model.encoder.layer.{bid}.attention.output.dense", # Nemotron Omni
             "vision.blocks.{bid}.attn.wo", # deepseek4v
             "model.vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj", # Granite4Vision
@@ -2098,6 +2106,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
+            "visual.encoder.layers.{bid}.layer_norm2", # mage-vl
             "vision_model.encoder.layer.{bid}.norm2", # Nemotron Omni
             "vision.blocks.{bid}.norm2", # deepseek4v
             "model.vision_tower.vision_model.encoder.layers.{bid}.layer_norm2", # Granite4Vision
@@ -2127,6 +2136,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
+            "visual.encoder.layers.{bid}.mlp.fc1", # mage-vl
             "vision_model.encoder.layer.{bid}.mlp.fc1", # Nemotron Omni
             "vision.blocks.{bid}.mlp.w1_up", # deepseek4v (split from fused w1)
             "vision_encoder.blocks.{bid}.mlp.fc3", # dots3note
@@ -2167,6 +2177,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
+            "visual.encoder.layers.{bid}.mlp.fc2", # mage-vl
             "vision_model.encoder.layer.{bid}.mlp.fc2", # Nemotron Omni
             "vision.blocks.{bid}.mlp.w2", # deepseek4v
             "vision_encoder.blocks.{bid}.mlp.fc2", # dots3note
@@ -2245,6 +2256,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
+            "visual.layernorm_pre", # mage-vl
             "vision_tower.vision_model.pre_layrnorm",
             "vision_tower.ln_pre", # pixtral-hf
             "vision_encoder.ln_pre", # pixtral
@@ -2277,6 +2289,7 @@ class TensorNameMap:
             "vision_tower.post_trunk_norm", # dots.ocr
             "vision_encoder.post_trunk_norm", # dots3note
             "vit.perceive.after_rms", # HunyuanVL
+            "mm_projector.post_norm", # Kimi-K3.1
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (

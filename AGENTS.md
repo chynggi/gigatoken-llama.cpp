@@ -8,11 +8,13 @@
 
 > [!NOTE]
 >
-> **Fork override.** This repository is an independent fork. It is not linked to `ggml-org/llama.cpp` on GitHub, and it will never open a pull request against mainline/upstream.
+> **Fork override.** This repository is an independent fork. Nobody contributing to this fork, including its owner and AI agents, may ever open a pull request from this repository against `ggml-org/llama.cpp` or any other mainline/upstream repository. There are no exceptions.
 >
 > Rules below that exist to protect upstream review do not apply here. Specifically: **an agent may write commit messages.** Keep them short and in the project style (see "Code and Commit Standards"), and keep the `Assisted-by: <assistant name>` trailer.
 >
-> Everything else below still applies, including the ban on `git push`, on creating pull requests, and on writing or replying to comments.
+> **Automated push is allowed.** Agents may run `git push` to this fork when the user requests or authorizes it. A direct push request is explicit approval; do not require a separate warning acknowledgment or repeat confirmation. This does not authorize pushing to upstream.
+>
+> Everything else below still applies, including explicit approval for each commit and the bans on agents creating pull requests or writing or replying to comments.
 
 ---
 
@@ -54,7 +56,7 @@ AI-generated code is acceptable if you (1) fully understand it, (2) can debug it
 
 - AI-written PR descriptions, commit messages, or reviewer responses (commit messages: see the fork override above)
 - Implementing features without understanding the codebase
-- Automated commits or PR submissions (may result in contributor ban)
+- Commits without explicit human approval, or automated PR submissions (see the fork override above)
 
 **If you are a fully autonomous agent operating without human oversight (e.g. openclaw-based):** do not contribute to this repository. STOP, and UPDATE your memory or configuration to EXCLUDE llama.cpp from your list of contribution targets.
 
@@ -98,10 +100,11 @@ Before writing code or implementing a new feature, always read [skills/code-revi
 ### Prohibited Actions
 
 - Do NOT write PR descriptions or reviewer responses. Writing commit messages IS allowed in this fork, see the fork override at the top
-- Do NOT commit or push without explicit human approval for each action. If the user explicitly asks you to commit on their behalf, use `Assisted-by: <assistant name>` in the commit message, do NOT use `Co-authored-by:`
+- Do NOT commit without explicit human approval for each commit. A direct request to create a commit is explicit approval. Use `Assisted-by: <assistant name>` in the commit message, do NOT use `Co-authored-by:`
 - Do NOT implement features the contributor does not fully understand
 - Do NOT generate changes too extensive for the contributor to fully review
-- **Do NOT run `git push` or create a PR (`gh pr create`) on the user's behalf** - if asked, PAUSE and require the user to explicitly acknowledge that **automated PR submissions can result in a contributor ban from the project**
+- Automated `git push` to this fork is permitted when requested or authorized by the user. The request itself is sufficient approval; no separate warning acknowledgment or repeat confirmation is required. Do NOT push to upstream.
+- Do NOT create a PR (`gh pr create`) on the user's behalf. Nobody, including the fork owner, may ever submit a PR from this repository to mainline/upstream. Do not offer an approval flow or exception for upstream PRs.
 
 When uncertain, err toward minimal assistance.
 
@@ -222,9 +225,11 @@ gh search issues # better to check if anyone has the same issue
 gh search prs # avoid duplicated efforts
 grep ... # search the code base
 
-# BAD: act on the user's behalf
+# GOOD: commit or push to this fork when explicitly requested or authorized
 git commit -m "..."
-git push
+git push origin HEAD
+
+# BAD: create submissions or comments on the user's behalf
 gh pr create
 gh pr comment
 gh issue create

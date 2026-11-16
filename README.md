@@ -114,6 +114,7 @@ The `llama.cpp` project is built on top of the [ggml](https://github.com/ggml-or
 - [cli](tools/cli/README.md)
 - [completion](tools/completion/README.md)
 - [server](tools/server/README.md)
+- [Text-to-speech (TTS) models](docs/multimodal/tts.md)
 - [GBNF grammars](grammars/README.md)
 
 #### Development

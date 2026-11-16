@@ -8,8 +8,8 @@
 static __device__ __forceinline__ void argmax_warp_reduce(float & maxval, int & argmax) {
 #pragma unroll
     for (int offset = WARP_SIZE/2; offset > 0; offset >>= 1) {
-        const float val = __shfl_xor_sync(0xFFFFFFFF, maxval, offset, WARP_SIZE);
-        const int   col = __shfl_xor_sync(0xFFFFFFFF, argmax, offset, WARP_SIZE);
+        const float val = ggml_cuda_shfl_xor(maxval, offset, WARP_SIZE);
+        const int   col = ggml_cuda_shfl_xor(argmax, offset, WARP_SIZE);
         if (val > maxval) {
             maxval = val;
             argmax = col;

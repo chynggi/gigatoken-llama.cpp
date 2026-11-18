@@ -429,6 +429,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "H2OLightningModel": "h2o_lightning",
     "Qwen3_5ForConditionalGeneration": "qwen3vl",
     "Qwen3_5MoeForConditionalGeneration": "qwen3vl",
+    "SenseNovaLoopForConditionalGeneration": "sensenova",
     "Qwen4ExpForConditionalGeneration": "qwen4exp",
     "RADIOModel": "nemotron",
     "Sarashina2VisionForCausalLM": "sarashina2",

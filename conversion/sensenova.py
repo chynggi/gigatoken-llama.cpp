@@ -12,7 +12,8 @@ The mHC routers (`mhc`) are per-sublayer, not per-layer: `mhc_attn` and `mhc_ffn
 projection of width 2*streams*dim -> 2*streams + streams^2, and the sublayer runs once on the
 pre-weighted sum of the residual streams. Those tensors go into the file untouched and stay fp32.
 
-Vision and the MTP head are dropped: this GGUF is text-only.
+Vision is exported separately through `--mmproj`: the tower is `qwen3_5_vision`, the same
+architecture Qwen3.5 ships, so it reuses the Qwen3.5 vision converter and runtime graph.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import gguf
 from . import ModelBase, logger
 from .qwen import Qwen3_5TextModel
+from .qwen3vl import Qwen3VLVisionModel
 
 
 def execution_plan(loop: dict, n_phys: int) -> list[int]:
@@ -145,3 +147,14 @@ class SenseNovaLoopModel(Qwen3_5TextModel):
             return
 
         yield from super().modify_tensors(data_torch, name.replace("model.language_model.", "model."), bid)
+
+
+@ModelBase.register("SenseNovaLoopForConditionalGeneration")
+class SenseNovaLoopVisionModel(Qwen3VLVisionModel):
+    """Vision tower of SenseNova-Loop, exported with `--mmproj`.
+
+    The checkpoint's `vision_config.model_type` is `qwen3_5_vision`: 27 blocks, hidden 1152,
+    patch 16, spatial merge 2, merger out 4096, no deepstack. That is the Qwen3.5 tower
+    tensor for tensor, so the Qwen3.5 converter and the runtime's `qwen3vl_merger` graph
+    handle it unchanged. Only the weights differ.
+    """

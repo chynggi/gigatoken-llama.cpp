@@ -217,7 +217,7 @@ llama_model_sensenova_loop::graph::graph(const llama_model & model, const llm_gr
 
     // sense nova loop, expanded: the looped block appears once per visit, so a plain sequential
     // pass is exact. Inside the mHC range the residual is two streams and every sublayer routes.
-    const int64_t n_str_mhc = hparams.n_mhc_streams;
+    [[maybe_unused]] const int64_t n_str_mhc = hparams.n_mhc_streams;
 
     ggml_tensor * str_a = nullptr;   // stream 0
     ggml_tensor * str_b = nullptr;   // stream 1
@@ -576,13 +576,7 @@ ggml_tensor * llama_model_sensenova_loop::graph::build_layer_attn_linear(
     //k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
     //v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
-    // if head keys and value keys are different, repeat to force tensors into matching shapes
-    // note: need explicit repeat only if we are not using the fused GDN.
-    if (num_k_heads != num_v_heads && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch)) {
-        GGML_ASSERT(num_v_heads % num_k_heads == 0);
-        q_conv = ggml_repeat_4d(ctx0, q_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-        k_conv = ggml_repeat_4d(ctx0, k_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-    }
+    // the fused GDN op broadcasts the key heads across the value heads; no explicit repeat
 
     cb(q_conv, "q_conv_predelta", il);
     cb(k_conv, "k_conv_predelta", il);

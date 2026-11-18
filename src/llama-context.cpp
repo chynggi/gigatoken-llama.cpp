@@ -3063,8 +3063,9 @@ uint32_t llama_context::graph_max_nodes() const {
         model.arch == LLM_ARCH_HRM_TEXT || model.arch == LLM_ARCH_RAON1) {
         res = std::max<uint32_t>(1024u, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_SENSENOVA_LOOP) {
-        // 96 fused routers add a handful of nodes each on top of the qwen3.5 trunk
-        res = std::max<uint32_t>(n_tokens * 48, 32u * model.n_tensors());
+        // 96 fused routers add a handful of nodes each on top of the qwen3.5 trunk. This fork's
+        // graph_max_nodes() takes no token count, so budget by tensor count instead
+        res = std::max<uint32_t>(1024u, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
         model.arch == LLM_ARCH_METIS16 ||

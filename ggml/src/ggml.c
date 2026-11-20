@@ -1118,11 +1118,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "GLU",
     "MUL_MAT_ID_COLD",
+
+    "SLEEP",
 };
 
-
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
-
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1239,11 +1239,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "glu(x)",
     "mul_mat_id_cold(x,x,x,x)",
+
+    "sleep(x)",
 };
 
-
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
-
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4062,7 +4062,7 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
     GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
-    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16);
+    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16 || b->type == GGML_TYPE_BF16);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
 
     GGML_ASSERT(ggml_is_contiguous_rows(a));
@@ -5327,7 +5327,7 @@ struct ggml_tensor * ggml_tri(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
     enum ggml_tri_type    type) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] == a->ne[1]);
@@ -6289,6 +6289,27 @@ struct ggml_tensor * ggml_custom_inplace(
 
     return result;
 }
+
+// ggml_sleep
+
+// the result aliases a, the op only delays and never touches the data
+struct ggml_tensor * ggml_sleep(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int32_t               us) {
+    GGML_ASSERT(us >= 0);
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+    ggml_format_name(result, "%s (sleep)", a->name);
+
+    ggml_set_op_params_i32(result, 0, us);
+
+    result->op     = GGML_OP_SLEEP;
+    result->src[0] = a;
+
+    return result;
+}
+
 // ggml_cross_entropy_loss
 
 struct ggml_tensor * ggml_cross_entropy_loss(

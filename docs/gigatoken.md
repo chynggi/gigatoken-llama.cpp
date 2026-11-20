@@ -1,14 +1,13 @@
 # GigaToken tokenizer backend
 
-This fork provides an experimental Windows x64 integration of GigaToken for
+This fork provides an experimental Windows x64 and Linux x86_64 integration of GigaToken for
 raw-text BPE and SentencePiece BPE tokenization. It does not change the public
 `llama_tokenize()` ABI, model parameters, special-token partitioning, BOS/EOS
 handling, or detokenization.
 
 The integration is pinned to:
 
-- llama.cpp commit `67b9b0e7f6ce45d929a4411907d3c48ec719e81c`
-- GigaToken commit `542367a3efed134883fb4f1140b49c04e6fad3a3`
+- GigaToken 0.11.0 commit `cd5ee648c6202f9e51ac75a2bf9d86cb68d9ba67`
 - Rust toolchain `nightly-2026-07-22`
 
 GigaToken remains an unmodified submodule. CMake copies it into the build tree,
@@ -45,6 +44,13 @@ cmake -S . -B build-on -G Ninja `
     -DLLAMA_GIGATOKEN=ON `
     -DLLAMA_BUILD_TESTS=ON
 cmake --build build-on --parallel
+```
+
+For a CUDA build on Linux, configure with GigaToken enabled:
+
+```sh
+cmake -S . -B build -DGGML_CUDA=ON -DLLAMA_GIGATOKEN=ON
+cmake --build build --config Release --parallel
 ```
 
 The ON build validates the exact submodule revision, requires a clean

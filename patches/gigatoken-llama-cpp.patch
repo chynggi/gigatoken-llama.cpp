@@ -1,5 +1,5 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index c7eaa08..b42094e 100644
+index c905ba8..3a2306c 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -9,17 +9,40 @@ license = "MIT"
@@ -78,7 +78,7 @@ index c7eaa08..b42094e 100644
  
  # madvise/prctl on Linux (pretoken cache table, batch gather, bench THP
  # setup); already in the tree transitively via memmap2/pyo3.
-diff --git b/include/gigatoken_llama.h b/include/gigatoken_llama.h
+diff --git a/include/gigatoken_llama.h b/include/gigatoken_llama.h
 new file mode 100644
 index 0000000..e342e90
 --- /dev/null
@@ -198,10 +198,10 @@ index 0000000..e342e90
 +
 +#endif
 diff --git a/src/bpe/sentencepiece.rs b/src/bpe/sentencepiece.rs
-index aa6c611..3324e0c 100644
+index b12a1bb..5047cc1 100644
 --- a/src/bpe/sentencepiece.rs
 +++ b/src/bpe/sentencepiece.rs
-@@ -1163,6 +1163,58 @@ impl SentencePieceBPE {
+@@ -1223,6 +1223,58 @@ impl SentencePieceBPE {
          }
      }
  
@@ -313,7 +313,7 @@ index 7a5c12a..1d67788 100644
      fn as_bytes(&self) -> &[u8] {
          &self.mmap
 diff --git a/src/lib.rs b/src/lib.rs
-index 11906a6..bfa7c65 100644
+index ecc4434..d0ab2fb 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -1,18 +1,28 @@
@@ -345,17 +345,17 @@ index 11906a6..bfa7c65 100644
  
  use crate::batch::{
      encode_files_docs, encode_files_docs_serial, encode_into, sp_encode_docs_ragged_serial,
-@@ -552,3 +562,4 @@ fn gigatoken_rs<'py>(py: Python, m: &Bound<'py, PyModule>) -> PyResult<()> {
-     m.add_function(wrap_pyfunction!(bindings::hub::get_hf_token, m)?)?;
+@@ -568,3 +578,4 @@ fn gigatoken_rs<'py>(py: Python, m: &Bound<'py, PyModule>) -> PyResult<()> {
+     m.add_function(wrap_pyfunction!(bindings::cache::get_max_cache_bytes, m)?)?;
      Ok(())
  }
 +}
-diff --git b/src/llama_cpp.rs b/src/llama_cpp.rs
+diff --git a/src/llama_cpp.rs b/src/llama_cpp.rs
 new file mode 100644
-index 0000000..332fdae
+index 0000000..4796201
 --- /dev/null
 +++ b/src/llama_cpp.rs
-@@ -0,0 +1,852 @@
+@@ -0,0 +1,853 @@
 +use crate::bpe::sentencepiece::{EncodeState, SentencePieceBPE, WordSplit};
 +use crate::bpe::tiktoken::{RankedMerges, Tokenizer};
 +use crate::bpe::{ByteRemapping, ranked_merge_key};
@@ -492,7 +492,7 @@ index 0000000..332fdae
 +            .pop()
 +            .unwrap_or_else(|| match &self.model {
 +                Model::Bpe(tokenizer) => Worker::Bpe(tokenizer.fork()),
-+                Model::Spm(_) => Worker::Spm(EncodeState::new()),
++                Model::Spm(tokenizer) => Worker::Spm(EncodeState::with_budget(tokenizer.max_cache_bytes())),
 +            });
 +        WorkerLease {
 +            owner: self,
@@ -981,6 +981,7 @@ index 0000000..332fdae
 +        split_safe: Vec::new(),
 +        cross_pieces: Vec::new(),
 +        cross_prev: [0; 4],
++        max_cache_bytes: Some(Tokenizer::DEFAULT_MAX_CACHE_BYTES),
 +    };
 +    tokenizer.finalize_speed_paths();
 +    Ok(tokenizer)
@@ -1250,7 +1251,7 @@ index 35442be..7a65600 100644
  }
  
  /// A model repo's tokenizer.json from the local HF cache.
-diff --git b/tests/llama_cpp_ffi.rs b/tests/llama_cpp_ffi.rs
+diff --git a/tests/llama_cpp_ffi.rs b/tests/llama_cpp_ffi.rs
 new file mode 100644
 index 0000000..03183d1
 --- /dev/null

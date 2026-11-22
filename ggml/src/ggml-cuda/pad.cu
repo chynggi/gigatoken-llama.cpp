@@ -64,11 +64,44 @@ static __global__ void pad_f32(const float * src, size_t s00, size_t s01, size_t
 }
 
 
+// rows narrower than a block: one thread per element of dst over a flat grid, instead of a block per row
+static __global__ void pad_f32_flat(const float * src, size_t s00, size_t s01, size_t s02, size_t s03, float * dst,
+                                    const int lp0, const int rp0, const int lp1, const int rp1,
+                                    const int lp2, const int rp2, const int lp3, const int rp3,
+                                    const int ne0, const int ne1, const int ne2, const int ne3) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= (int64_t) ne0 * ne1 * ne2 * ne3) {
+        return;
+    }
+
+    const int i0 = i % ne0;
+    const int i1 = (i / ne0) % ne1;
+    const int i2 = (i / ((int64_t) ne0 * ne1)) % ne2;
+    const int i3 = i / ((int64_t) ne0 * ne1 * ne2);
+
+    if ((i0 >= lp0 && i0 < ne0 - rp0) && (i1 >= lp1 && i1 < ne1 - rp1) && (i2 >= lp2 && i2 < ne2 - rp2) &&
+        (i3 >= lp3 && i3 < ne3 - rp3)) {
+        const int64_t src_idx = (i3 - lp3) * s03 + (i2 - lp2) * s02 + (i1 - lp1) * s01 + (i0 - lp0) * s00;
+        dst[i] = src[src_idx];
+    } else {
+        dst[i] = 0.0f;
+    }
+}
+
 static void pad_f32_cuda(const float * src, size_t s00, size_t s01, size_t s02, size_t s03, float * dst,
     const int lp0, const int rp0, const int lp1, const int rp1,
     const int lp2, const int rp2, const int lp3, const int rp3,
     const int ne0, const int ne1, const int ne2, const int ne3,
     const bool circular, cudaStream_t stream) {
+    const int64_t ne = (int64_t) ne0 * ne1 * ne2 * ne3;
+    if (!circular && ne0 < CUDA_PAD_BLOCK_SIZE/2 && (ne + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE <= INT_MAX) {
+        const int64_t num_blocks = (ne + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
+        pad_f32_flat<<<num_blocks, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, s00, s01, s02, s03, dst,
+                                                                     lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
+                                                                     ne0, ne1, ne2, ne3);
+        return;
+    }
+
     int  num_blocks = (ne0 + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
     dim3 gridDim(num_blocks, std::min(ne1, 65535), std::min(ne2 * ne3, 65535));
     pad_f32<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, s00, s01, s02, s03, dst,

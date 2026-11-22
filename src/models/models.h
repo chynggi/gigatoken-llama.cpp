@@ -2550,6 +2550,13 @@ struct llama_model_inkling2 : public llama_model_base {
 
         ggml_tensor * inp_out_ids = nullptr;
         ggml_tensor * tau         = nullptr; // log-scaled positions
+
+    private:
+        // the normalized depth states of blocks[0, n), latest first, shared by every mix over the same blocks
+        ggml_tensor * normed_states(const std::vector<ggml_tensor *> & blocks, size_t n);
+
+        std::map<ggml_tensor *, ggml_tensor *>                normed_block;
+        std::map<std::vector<ggml_tensor *>, ggml_tensor *>   normed_prefix;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

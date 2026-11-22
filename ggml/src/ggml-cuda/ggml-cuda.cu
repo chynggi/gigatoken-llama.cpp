@@ -67,6 +67,7 @@
 #include "ggml-cuda/gla.cuh"
 #include "ggml-cuda/gated_delta_net.cuh"
 #include "ggml-cuda/dsv4-hc.cuh"
+#include "ggml-cuda/inkling2.cuh"
 #include "ggml-cuda/xing4_0-hc.cuh"
 #include "ggml-cuda/set.cuh"
 #include "ggml-cuda/set-rows.cuh"
@@ -4491,6 +4492,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    if (cuda_ctx->stream_context().concurrent_events.empty()) {
+        ggml_cuda_inkling2_args inkling2;
+        if (ggml_cuda_inkling2_match(cgraph, i, inkling2)) {
+            ggml_cuda_inkling2_fused(*cuda_ctx, inkling2);
+            return inkling2.n_nodes - 1;
+        }
+    }
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&

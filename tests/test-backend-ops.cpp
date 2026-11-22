@@ -3865,6 +3865,237 @@ struct test_softcap : public test_case {
     }
 };
 
+// Inkling 2: the glue op chains of src/models/inkling2.cpp, built in the same op order as the model, so that a
+// backend that fuses them (CUDA, inkling2.cu) is compared against the unfused CPU ops
+struct test_inkling2 : public test_case {
+    enum chain_type { CLIP, CONV, SITU, MIX, CTRL, RELBIAS, CONV_STATE, CONV_DYN };
+
+    const chain_type chain;
+    const int64_t    n;     // channels
+    const int64_t    n_tok; // tokens
+    const int64_t    k;     // CLIP: heads, CONV(_STATE, _DYN): sequences, SITU: experts used, MIX: states,
+                            // CTRL: gate rank, RELBIAS: heads
+    const int64_t    v;     // CLIP: has a scale, SITU: gathers the scale by expert id, MIX: queries, RELBIAS: n_kv,
+                            // CONV_DYN: heads, CONV(_STATE): a residual add follows
+
+    ggml_tensor * state_store = nullptr; // CONV_STATE: the state store, compared along with the output
+
+    static constexpr int64_t n_expert = 16;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        static const char * names[] = { "INKLING2_CLIP", "INKLING2_CONV", "INKLING2_SITU", "INKLING2_MIX", "INKLING2_CTRL",
+            "INKLING2_RELBIAS", "INKLING2_CONV_STATE", "INKLING2_CONV_DYN" };
+        return names[chain];
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(n, n_tok, k, v);
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override {
+        if (state_store) {
+            return { state_store, out_node };
+        }
+        return {};
+    }
+
+    ggml_tensor * out_node = nullptr;
+
+    double max_nmse_err() override {
+        // MIX, CTRL and RELBIAS contain matrix multiplications, the tolerance of test_mul_mat
+        return chain == MIX || chain == CTRL || chain == RELBIAS ? 5e-4 : 1e-6;
+    }
+
+    test_inkling2(chain_type chain, int64_t n, int64_t n_tok, int64_t k, int64_t v)
+        : chain(chain), n(n), n_tok(n_tok), k(k), v(v) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = nullptr;
+
+        switch (chain) {
+            case CLIP: {
+                // y = a*clamp(c/(|a| + 1e-6), 0, 1), a = x*w
+                ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n, k, n_tok);
+                ggml_set_name(a, "x");
+                if (v) {
+                    ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, k);
+                    ggml_set_name(w, "w");
+                    a = ggml_mul(ctx, a, w);
+                }
+                ggml_tensor * norm = ggml_sqrt(ctx, ggml_sum_rows(ctx, ggml_sqr(ctx, a)));
+                norm = ggml_scale_bias(ctx, norm, 1.0f, 1e-6f);
+                ggml_tensor * factor = ggml_div(ctx, ggml_fill(ctx, norm, 2.0f), norm);
+                out = ggml_mul(ctx, a, ggml_clamp(ctx, factor, 0.0f, 1.0f));
+            } break;
+            case CONV: {
+                // causal short convolution with a residual
+                const int64_t d_conv = 4;
+                ggml_tensor * cur  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_tok*k);
+                ggml_tensor * past = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_conv - 1, n, k);
+                ggml_tensor * w    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_conv, n);
+                ggml_set_name(cur, "cur");
+                ggml_set_name(w, "w");
+                ggml_tensor * x = ggml_transpose(ctx, ggml_reshape_3d(ctx, cur, n, n_tok, k));
+                x = ggml_concat(ctx, past, x, 0);
+                ggml_tensor * y = ggml_reshape_2d(ctx, ggml_ssm_conv(ctx, x, w), n, n_tok*k);
+                out = ggml_scale(ctx, ggml_add(ctx, cur, y), 1.0f/sqrtf(d_conv + 1));
+                if (v) {
+                    // the residual stream added right after the convolution
+                    out = ggml_add(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_tok*k), out);
+                }
+            } break;
+            case SITU: {
+                // SiTU of a fused gate/up expert output with a per-expert scale
+                const int64_t n_used = k;
+                ggml_tensor * gu = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2*n, n_used, n_tok);
+                ggml_set_name(gu, "gate_up");
+                ggml_tensor * s;
+                if (v) {
+                    ggml_tensor * table = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_expert);
+                    ggml_tensor * ids   = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert, n_tok);
+                    ggml_set_name(ids, "ids");
+                    // the expert ids are computed well before the scale gather in the model graph
+                    ids = ggml_view_2d(ctx, ids, n_used, n_tok, ids->nb[1], 0);
+                    ggml_build_forward_expand(gf, ids);
+                    s = ggml_repeat_4d(ctx, ggml_reshape_3d(ctx, table, 1, n_expert, 1), 1, n_expert, n_tok, 1);
+                    s = ggml_get_rows(ctx, s, ids);
+                } else {
+                    s = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_used, n_tok);
+                }
+                gu = ggml_mul(ctx, gu, s);
+                ggml_tensor * gate = ggml_view_3d(ctx, gu, n, n_used, n_tok, gu->nb[1], gu->nb[2], 0);
+                ggml_tensor * up   = ggml_view_3d(ctx, gu, n, n_used, n_tok, gu->nb[1], gu->nb[2], n*ggml_element_size(gu));
+                const float beta = 4.0f;
+                const float lb   = 25.0f;
+                ggml_tensor * act = ggml_scale(ctx, ggml_tanh(ctx, ggml_scale(ctx, gate, 1.0f/beta)), beta);
+                act = ggml_mul(ctx, act, ggml_sigmoid(ctx, gate));
+                up  = ggml_scale(ctx, ggml_tanh(ctx, ggml_scale(ctx, up, 1.0f/lb)), lb);
+                out = ggml_mul(ctx, act, up);
+            } break;
+            case MIX: {
+                // attention over the depth: k - 1 normalized earlier states and the normalized current one
+                const int64_t n_q = v;
+                ggml_tensor * blocks = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n, k - 1, n_tok);
+                ggml_tensor * cur    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_tok);
+                ggml_tensor * query  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_q);
+                ggml_set_name(cur, "cur");
+                ggml_set_name(query, "query");
+                ggml_tensor * states = ggml_rms_norm(ctx, ggml_reshape_3d(ctx, cur, n, 1, n_tok), 1e-6f);
+                states = ggml_concat(ctx, ggml_rms_norm(ctx, blocks, 1e-6f), states, 1);
+                ggml_tensor * queries = ggml_repeat(ctx, query, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n, n_q, n_tok));
+                ggml_tensor * scores  = ggml_mul_mat(ctx, states, queries);
+                scores = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f/sqrtf(n), 0.0f);
+                out = ggml_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx, states)), scores);
+            } break;
+            case CTRL: {
+                // loop controller: (cur - tanh(F h)*cur) + tanh(G h)*msg, h = D [rms_norm(cur); rms_norm(msg)]
+                ggml_tensor * mixed = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n, 3, n_tok);
+                ggml_tensor * msg   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_tok);
+                ggml_tensor * down  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2*n, k);
+                ggml_tensor * gain  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+                ggml_tensor * fgt   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+                ggml_set_name(msg, "msg");
+                ggml_tensor * cur = ggml_view_2d(ctx, mixed, n, n_tok, mixed->nb[2], mixed->nb[1]);
+                ggml_tensor * h = ggml_concat(ctx, ggml_rms_norm(ctx, cur, 1e-6f), ggml_rms_norm(ctx, msg, 1e-6f), 0);
+                h = ggml_mul_mat(ctx, down, h);
+                // both projections first, as the model orders them
+                ggml_tensor * f = ggml_mul_mat(ctx, fgt,  h);
+                ggml_tensor * g = ggml_mul_mat(ctx, gain, h);
+                ggml_build_forward_expand(gf, f);
+                ggml_build_forward_expand(gf, g);
+                f = ggml_tanh(ctx, f);
+                g = ggml_tanh(ctx, g);
+                out = ggml_add(ctx, ggml_sub(ctx, cur, ggml_mul(ctx, f, cur)), ggml_mul(ctx, g, msg));
+            } break;
+            case RELBIAS: {
+                // the per-head attention mask with the relative-position bias, gathered by distance
+                const int64_t n_rel  = n;
+                const int64_t n_head = k;
+                const int64_t n_kv   = v;
+                const int64_t n_ext  = 64;
+                ggml_tensor * w     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_rel, n_ext);
+                ggml_tensor * r     = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_rel, n_head, n_tok);
+                ggml_tensor * sinks = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_head, n_tok);
+                ggml_tensor * pos   = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_kv, n_tok);
+                ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n_kv, n_tok);
+                ggml_set_name(pos, "pos");
+                ggml_tensor * table = ggml_mul_mat(ctx, ggml_pad(ctx, w, 0, 1, 0, 0), r);
+                table = ggml_sub(ctx, table, sinks);
+                table = ggml_cont(ctx, ggml_permute(ctx, table, 1, 0, 2, 3));
+                ggml_tensor * kq_b = ggml_get_rows(ctx, table, pos);
+                kq_b = ggml_reshape_4d(ctx, kq_b, n_head, n_kv, n_tok, 1);
+                kq_b = ggml_cont(ctx, ggml_permute(ctx, kq_b, 2, 0, 1, 3));
+                out = ggml_add(ctx, kq_b, ggml_cast(ctx, mask, GGML_TYPE_F32));
+                out = ggml_cast(ctx, out, GGML_TYPE_F16);
+            } break;
+            case CONV_STATE:
+            case CONV_DYN: {
+                // the short convolution over the stored state and the tokens, the state store keeps the last
+                // d_conv - 1 inputs (CONV_DYN: one token)
+                const int64_t d_conv = 4;
+                const int64_t n_seqs = k;
+                ggml_tensor * cur   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_tok*n_seqs);
+                ggml_tensor * past  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_conv - 1, n, n_seqs);
+                ggml_tensor * w     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_conv, n);
+                ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (d_conv - 1)*n + 5, n_seqs + 1);
+                ggml_set_name(cur, "cur");
+                ggml_set_name(cache, "cache");
+                ggml_tensor * x = ggml_transpose(ctx, ggml_reshape_3d(ctx, cur, n, n_tok, n_seqs));
+                x = ggml_concat(ctx, past, x, 0);
+                ggml_tensor * last = ggml_view_3d(ctx, x, d_conv - 1, n, n_seqs, x->nb[1], x->nb[2], n_tok*ggml_element_size(x));
+                ggml_tensor * cell = ggml_view_2d(ctx, cache, (d_conv - 1)*n, n_seqs, cache->nb[1], cache->nb[1] + 5*ggml_element_size(cache));
+                state_store = ggml_cpy(ctx, last, cell);
+                ggml_set_name(state_store, "state_store");
+                ggml_build_forward_expand(gf, state_store);
+                ggml_tensor * y = ggml_reshape_2d(ctx, ggml_ssm_conv(ctx, x, w), n, n_tok*n_seqs);
+                if (chain == CONV_DYN) {
+                    // input-dependent taps per head, as the full-attention K and V convolutions
+                    const int64_t n_heads = v;
+                    ggml_tensor * dyn = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_conv*n_heads, n_seqs);
+                    ggml_set_name(dyn, "taps");
+                    ggml_tensor * taps = ggml_reshape_3d(ctx, dyn, d_conv, n_heads, n_seqs);
+                    for (int64_t lag = 0; lag < d_conv; ++lag) {
+                        ggml_tensor * tap    = ggml_view_3d(ctx, taps, 1, n_heads, n_seqs, taps->nb[1], taps->nb[2], lag*taps->nb[0]);
+                        ggml_tensor * window = ggml_view_3d(ctx, x, 1, n, n_seqs, x->nb[1], x->nb[2], (d_conv - 1 - lag)*x->nb[0]);
+                        window = ggml_reshape_3d(ctx, ggml_cont(ctx, ggml_transpose(ctx, window)), n/n_heads, n_heads, n_seqs);
+                        y = ggml_add(ctx, y, ggml_reshape_2d(ctx, ggml_mul(ctx, window, tap), n, n_seqs));
+                    }
+                }
+                out = ggml_scale(ctx, ggml_add(ctx, cur, y), 1.0f/sqrtf((chain == CONV_DYN ? 2 : 1)*d_conv + 1));
+                if (chain == CONV_STATE && v) {
+                    out = ggml_add(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n_tok*n_seqs), out);
+                }
+            } break;
+        }
+
+        ggml_set_name(out, "out");
+        out_node = out;
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
+            if (t->type == GGML_TYPE_I32) {
+                // expert ids, or relative positions in [0, n_ext] (n_ext: the padded zero column)
+                const int range = chain == RELBIAS ? 64 + 1 : n_expert;
+                std::vector<int32_t> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); i++) {
+                    data[i] = rand() % range;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_SILU_BACK
 struct test_silu_back : public test_case {
     const ggml_type type;
@@ -11919,6 +12150,40 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scale(GGML_TYPE_BF16, {10, 10, 10, 10}, 2.0f, 1.0f, true, 1)); // view test, inplace
     test_cases.emplace_back(new test_scale(GGML_TYPE_F16, {10, 10, 10, 10}, 2.0f, 1.0f, false, 1)); // view test
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
+    // Inkling 2 glue chains (inkling2.cu)
+    for (int64_t n_tok : { 1, 7, 512 }) {
+        // the shapes of Inkling 2 Mini
+        test_cases.emplace_back(new test_inkling2(test_inkling2::CLIP, 128, n_tok, 24, 1));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::CLIP, 128, n_tok,  8, 0));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::CLIP,  16, n_tok, 24, 1));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::CONV, 1024, n_tok, 1, 0));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::CONV, 2304, n_tok, 1, 0));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::CONV, 2304, n_tok, 1, 1));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::SITU, 1152, n_tok, 8, 1));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::SITU, 1152, n_tok, 8, 0));
+        for (int64_t n_states : { 2, 5, 9, 16 }) {
+            for (int64_t n_q : { 1, 3, 4 }) {
+                test_cases.emplace_back(new test_inkling2(test_inkling2::MIX, 2304, n_tok, n_states, n_q));
+            }
+        }
+        test_cases.emplace_back(new test_inkling2(test_inkling2::CTRL, 2304, n_tok, 64, 0));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::RELBIAS, 16, n_tok, 24, 256));
+        test_cases.emplace_back(new test_inkling2(test_inkling2::RELBIAS, 16, n_tok, 24, 1024 + n_tok));
+    }
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE, 2304, 1, 1, 0));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE, 2304, 1, 1, 1));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE, 1024, 1, 1, 0));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE,  256, 1, 3, 0));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE, 2304, 2, 1, 0));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE, 2304, 7, 1, 1));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE, 1024, 512, 1, 0));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_STATE,  256, 5, 3, 1));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_DYN,   1024, 1, 1, 8));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV_DYN,    256, 1, 3, 2));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CONV, 256, 3, 4, 0));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::MIX,  96, 3, 3, 2));
+    test_cases.emplace_back(new test_inkling2(test_inkling2::CTRL, 96, 3, 8, 0));
+    // end of Inkling 2 glue chains
     test_cases.emplace_back(new test_silu_back());
 
     for (float eps : { 0.0f, 1e-6f, 1e-4f, 1e-1f, 10.f }) {

@@ -371,8 +371,9 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
         kq_b = ggml_cont(ctx0, ggml_permute(ctx0, kq_b, 2, 0, 1, 3));
         cb(kq_b, "kq_b", il);
 
-        // keep shape and split state of sinks, even if 1D [n_head] would be enough
-        sinks = ggml_fill(ctx0, sinks, 0.0f);
+        // keep split state of sinks on the head axis
+        sinks = ggml_view_1d(ctx0, sinks, n_head, 0);
+        sinks = ggml_fill(ctx0, ggml_reshape_1d(ctx0, sinks, n_head), 0.0f);
 
         cur = build_attn(inp,
                 nullptr, nullptr, nullptr,

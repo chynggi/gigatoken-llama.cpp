@@ -247,14 +247,14 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_st
 
 llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_hybrid_idx * mem) :
     llama_memory_hybrid_context(mem),
-    kpool(mem->get_mem_idx() == nullptr ? llama_kv_cache_kpool_context() : llama_kv_cache_kpool_context(mem->get_mem_idx())) {}
+    kpool(mem->get_mem_idx()) {}
 
 llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
         llama_memory_hybrid_idx * mem,
                   llama_context * lctx,
                            bool   optimize) :
     llama_memory_hybrid_context(mem, lctx, optimize),
-    kpool(mem->get_mem_idx() == nullptr ? llama_kv_cache_kpool_context() : llama_kv_cache_kpool_context(mem->get_mem_idx(), lctx, optimize)) {}
+    kpool(mem->get_mem_idx(), lctx, optimize) {}
 
 llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
         llama_memory_hybrid_idx * mem,
@@ -263,8 +263,7 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
       std::vector<llama_ubatch>   ubatches) :
     // note: the base copies the ubatches; the indexer gets a copy of its own
     llama_memory_hybrid_context(mem, std::move(sinfos_attn), ubatches),
-    kpool(mem->get_mem_idx() == nullptr ? llama_kv_cache_kpool_context() :
-        llama_kv_cache_kpool_context(mem->get_mem_idx(), std::move(sinfos_idx), std::move(ubatches))) {}
+    kpool(mem->get_mem_idx(), std::move(sinfos_idx), std::move(ubatches)) {}
 
 bool llama_memory_hybrid_idx_context::next() {
     kpool.next();

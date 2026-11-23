@@ -299,9 +299,9 @@ llama_kv_cache_kpool_context::llama_kv_cache_kpool_context(llama_kv_cache_kpool 
     mem(mem),
     // graph reservation walks a full context, and the sparse attention is built only when this is set
     // without it the reserved worst case is the dense graph, so ggml-alloc must grow the buffer on the first decode
-    ns_ubatch(std::vector<uint32_t>{ mem->get_cache()->get_n_stream() }),
-    ctx_idx(new llama_kv_cache_context(mem->get_cache())) {
-    if (kpool_track()) {
+    ns_ubatch(mem ? std::vector<uint32_t>{ mem->get_cache()->get_n_stream() } : std::vector<uint32_t>{}),
+    ctx_idx(mem ? new llama_kv_cache_context(mem->get_cache()) : nullptr) {
+    if (mem && kpool_track()) {
         mem->layout_update();
         auto st = kpool_build_sizes();
         const auto * idx = mem->get_cache();
@@ -322,18 +322,20 @@ llama_kv_cache_kpool_context::llama_kv_cache_kpool_context(
                         bool   optimize) :
     mem(mem),
     // update() applies a pending cross-stream seq_cp, else the copy keeps stale indexer keys
-    ctx_idx(mem->get_cache()->init_update(lctx, optimize)) {}
+    ctx_idx(mem ? mem->get_cache()->init_update(lctx, optimize) : nullptr) {}
 
 llama_kv_cache_kpool_context::llama_kv_cache_kpool_context(
         llama_kv_cache_kpool * mem,
              slot_info_vec_t   sinfos_idx,
    std::vector<llama_ubatch>   ubatches) :
     mem(mem),
-    ns_ubatch(llama_kv_cache_kpool_ns(sinfos_idx)),
-    sinfos_kpool(mem->get_kpool() > 0 && mem->get_kpool_by_order() ? sinfos_idx : slot_info_vec_t()),
-    ctx_idx(new llama_kv_cache_context(mem->get_cache(), std::move(sinfos_idx), std::move(ubatches))) {
-    // Sequence edits force the touched positions to re-pool.
-    stale_batch = mem->stale_get();
+    ns_ubatch(mem ? llama_kv_cache_kpool_ns(sinfos_idx) : std::vector<uint32_t>{}),
+    sinfos_kpool(mem && mem->get_kpool() > 0 && mem->get_kpool_by_order() ? sinfos_idx : slot_info_vec_t()),
+    ctx_idx(mem ? new llama_kv_cache_context(mem->get_cache(), std::move(sinfos_idx), std::move(ubatches)) : nullptr) {
+    if (mem) {
+        // Sequence edits force the touched positions to re-pool.
+        stale_batch = mem->stale_get();
+    }
 }
 
 llama_kv_cache_kpool_context::~llama_kv_cache_kpool_context() = default;

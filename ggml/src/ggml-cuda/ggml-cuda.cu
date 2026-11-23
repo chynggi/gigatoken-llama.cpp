@@ -4292,6 +4292,84 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         return false;
     }
 
+    // fuse DSV4_HC_PRE -> RMS_NORM -> MUL into one pass
+    std::initializer_list<enum ggml_op> hc_pre_rms_mul_ops = { GGML_OP_DSV4_HC_PRE, GGML_OP_RMS_NORM, GGML_OP_MUL };
+
+    if (is_equal(hc_pre_rms_mul_ops, ops) && ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 2 })) {
+        const ggml_tensor * hc_pre   = cgraph->nodes[node_idx];
+        const ggml_tensor * rms_norm = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * mul      = cgraph->nodes[node_idx + 2];
+        const ggml_tensor * norm_w   = mul->src[0] == rms_norm ? mul->src[1] : mul->src[0];
+
+        if (rms_norm->src[0] == hc_pre && (mul->src[0] == rms_norm || mul->src[1] == rms_norm) &&
+            hc_pre->src[0]->type == GGML_TYPE_F32 && hc_pre->src[1]->type == GGML_TYPE_F32 &&
+            hc_pre->type == GGML_TYPE_F32 && rms_norm->type == GGML_TYPE_F32 &&
+            mul->type == GGML_TYPE_F32 && norm_w->type == GGML_TYPE_F32 &&
+            ggml_is_vector(norm_w) && norm_w->ne[0] == hc_pre->ne[0] && ggml_is_contiguous(norm_w) &&
+            ggml_are_same_shape(hc_pre, mul)) {
+            int out_nodes[] = { node_idx + 2 };
+            return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int)ops.size(), out_nodes, 1);
+        }
+        return false;
+    }
+
+    // fuse RMS_NORM -> MUL -> DSV4_HC_POST into one pass
+    std::initializer_list<enum ggml_op> rms_mul_hc_post_ops = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_DSV4_HC_POST };
+
+    if (is_equal(rms_mul_hc_post_ops, ops) && ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 2 })) {
+        const ggml_tensor * rms_norm = cgraph->nodes[node_idx];
+        const ggml_tensor * mul      = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * hc_post  = cgraph->nodes[node_idx + 2];
+        const ggml_tensor * norm_w   = mul->src[0] == rms_norm ? mul->src[1] : mul->src[0];
+
+        if ((mul->src[0] == rms_norm || mul->src[1] == rms_norm) && hc_post->src[0] == mul &&
+            rms_norm->src[0]->type == GGML_TYPE_F32 && rms_norm->type == GGML_TYPE_F32 &&
+            mul->type == GGML_TYPE_F32 && norm_w->type == GGML_TYPE_F32 &&
+            hc_post->src[1]->type == GGML_TYPE_F32 && hc_post->src[2]->type == GGML_TYPE_F32 &&
+            (hc_post->src[3] == nullptr || hc_post->src[3]->type == GGML_TYPE_F32) &&
+            hc_post->type == GGML_TYPE_F32 &&
+            ggml_is_vector(norm_w) && norm_w->ne[0] == rms_norm->ne[0] && ggml_is_contiguous(norm_w) &&
+            ggml_is_contiguous_rows(rms_norm->src[0]) && ggml_are_same_shape(rms_norm, mul)) {
+            int out_nodes[] = { node_idx + 2 };
+            return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int)ops.size(), out_nodes, 1);
+        }
+        return false;
+    }
+
+    // fuse MUL -> ADD -> SIGMOID -> SCALE [-> SCALE] scalar gate chains (hy_v4_flash)
+    std::initializer_list<enum ggml_op> hy_v4_hc_gate5_ops = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_SCALE, GGML_OP_SCALE };
+    std::initializer_list<enum ggml_op> hy_v4_hc_gate4_ops = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_SCALE };
+
+    if ((is_equal(hy_v4_hc_gate5_ops, ops) || is_equal(hy_v4_hc_gate4_ops, ops)) &&
+        ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + (int)ops.size() - 1 })) {
+        const ggml_tensor * mul     = cgraph->nodes[node_idx];
+        const ggml_tensor * add     = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * sigmoid = cgraph->nodes[node_idx + 2];
+        const ggml_tensor * scale1  = cgraph->nodes[node_idx + 3];
+        const ggml_tensor * dst     = cgraph->nodes[node_idx + (int)ops.size() - 1];
+        const ggml_tensor * x       = mul->src[0];
+        const ggml_tensor * scale   = mul->src[1];
+        const ggml_tensor * base    = add->src[0] == mul ? add->src[1] : add->src[0];
+
+        const bool chain_ok =
+            (add->src[0] == mul || add->src[1] == mul) &&
+            sigmoid->src[0] == add && ggml_get_unary_op(sigmoid) == GGML_UNARY_OP_SIGMOID &&
+            scale1->src[0] == sigmoid &&
+            (dst == scale1 || dst->src[0] == scale1);
+
+        if (chain_ok &&
+            x->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32 &&
+            base->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+            x->ne[2] == 1 && x->ne[3] == 1 &&
+            scale->ne[1] == 1 && scale->ne[2] == 1 && scale->ne[3] == 1 && (scale->ne[0] == 1 || scale->ne[0] == x->ne[0]) &&
+            base->ne[1]  == 1 && base->ne[2]  == 1 && base->ne[3]  == 1 && (base->ne[0]  == 1 || base->ne[0]  == x->ne[0]) &&
+            ggml_are_same_shape(x, dst)) {
+            int out_nodes[] = { node_idx + (int)ops.size() - 1 };
+            return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int)ops.size(), out_nodes, 1);
+        }
+        return false;
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -5352,6 +5430,11 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 1;
     }
 
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_DSV4_HC_POST }, {})) {
+        ggml_cuda_op_rms_norm_mul_dsv4_hc_post(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+        return 2;
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
@@ -5387,6 +5470,21 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_SQR }, { GGML_UNARY_OP_RELU })) {
         ggml_cuda_op_relu_sqr(*cuda_ctx, node, cgraph->nodes[i + 1]);
         return 1;
+    }
+
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_DSV4_HC_PRE, GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+        ggml_cuda_op_dsv4_hc_pre_rms_norm_mul(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+        return 2;
+    }
+
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_SCALE, GGML_OP_SCALE }, { GGML_UNARY_OP_SIGMOID })) {
+        ggml_cuda_op_hy_v4_hc_gate(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 3], cgraph->nodes[i + 4]);
+        return 4;
+    }
+
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_SIGMOID })) {
+        ggml_cuda_op_hy_v4_hc_gate(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 3], cgraph->nodes[i + 3]);
+        return 3;
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE, GGML_OP_DSV4_HC_POST }, { GGML_UNARY_OP_SIGMOID })) {

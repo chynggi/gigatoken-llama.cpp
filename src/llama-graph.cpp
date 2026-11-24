@@ -310,6 +310,34 @@ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+bool llm_graph_input_effort::any_steered(const float * alpha_seq, const llama_ubatch & ubatch) {
+    if (alpha_seq == nullptr || ubatch.seq_id == nullptr) {
+        return false;
+    }
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (alpha_seq[ubatch.seq_id[i][0]] != 0.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void llm_graph_input_effort::set_input(const llama_ubatch * ubatch) {
+    if (alpha == nullptr) {
+        return;
+    }
+    std::vector<float> data(ubatch->n_tokens);
+    for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+        data[i] = alpha_seq[ubatch->seq_id[i][0]];
+    }
+    ggml_backend_tensor_set(alpha, data.data(), 0, data.size()*sizeof(float));
+}
+
+bool llm_graph_input_effort::can_reuse(const llm_graph_params & params) {
+    return steered == any_steered(params.cparams.effort_alpha, params.ubatch) &&
+           (alpha == nullptr || alpha->ne[1] == params.ubatch.n_tokens);
+}
+
 void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && attn_scale) {
         const int64_t n_tokens = ubatch->n_tokens;
@@ -3018,6 +3046,26 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     res->add_input(std::move(inp));
 
     return cur;
+}
+
+llm_graph_input_effort * llm_graph_context::build_inp_effort() const {
+    const bool steered = llm_graph_input_effort::any_steered(cparams.effort_alpha, ubatch);
+    auto inp = std::make_unique<llm_graph_input_effort>(cparams.effort_alpha, steered);
+    if (steered) {
+        inp->alpha = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
+        ggml_set_input(inp->alpha);
+        cb(inp->alpha, "inp_effort_alpha", -1);
+    }
+    return static_cast<llm_graph_input_effort *>(res->add_input(std::move(inp)));
+}
+
+ggml_tensor * llm_graph_context::build_effort_steer(ggml_tensor * cur, ggml_tensor * steer, llm_graph_input_effort * inp, int il) const {
+    if (steer == nullptr || inp == nullptr || inp->alpha == nullptr) {
+        return cur;
+    }
+    ggml_tensor * delta = ggml_mul(ctx0, ggml_repeat(ctx0, steer, cur), inp->alpha);
+    cb(delta, "effort_steer", il);
+    return ggml_add(ctx0, cur, delta);
 }
 
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {

@@ -203,6 +203,25 @@ public:
     const llama_rope_section_order rope_section_order = LLAMA_ROPE_SECTION_ORDER_TYXZ;
 };
 
+// reasoning effort steering: alpha of each token's sequence
+class llm_graph_input_effort : public llm_graph_input_i {
+public:
+    llm_graph_input_effort(const float * alpha_seq, bool steered) : alpha_seq(alpha_seq), steered(steered) {}
+    virtual ~llm_graph_input_effort() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    // whether any token of the ubatch has a non-zero alpha; without one the graph has no steering nodes
+    static bool any_steered(const float * alpha_seq, const llama_ubatch & ubatch);
+
+    ggml_tensor * alpha = nullptr; // F32 [1, n_batch], nullptr when no token of the ubatch is steered
+
+    const float * alpha_seq;
+    const bool steered;
+};
+
 // temperature tuning, used by llama4
 class llm_graph_input_attn_temp : public llm_graph_input_i {
 public:
@@ -1348,6 +1367,11 @@ struct llm_graph_context {
     // same, for the lightning indexer
     ggml_tensor * build_rope_indexer(ggml_tensor * cur, ggml_tensor * pos, int il) const;
     ggml_tensor * build_inp_attn_scale() const;
+
+    llm_graph_input_effort * build_inp_effort() const;
+
+    // cur + alpha[token] * steer, in F32; returns cur unchanged when no token of the ubatch is steered
+    ggml_tensor * build_effort_steer(ggml_tensor * cur, ggml_tensor * steer, llm_graph_input_effort * inp, int il) const;
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;

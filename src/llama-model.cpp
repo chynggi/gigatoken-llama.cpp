@@ -3906,6 +3906,39 @@ int32_t llama_model_n_embd(const llama_model * model) {
     return model->hparams.n_embd;
 }
 
+bool llama_model_reasoning_effort_alpha(const llama_model * model, const char * effort, float * alpha) {
+    const auto & hp = model->hparams;
+    if (!hp.effort_steering) {
+        return false;
+    }
+    if (effort == nullptr) {
+        if (alpha) {
+            *alpha = hp.effort_default >= 0 ? hp.effort_alpha[hp.effort_default] : 0.0f;
+        }
+        return true;
+    }
+    for (uint32_t i = 0; i < hp.n_effort; ++i) {
+        if (std::strcmp(effort, hp.effort_name[i].data()) == 0) {
+            if (alpha) {
+                *alpha = hp.effort_alpha[i];
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+int32_t llama_model_reasoning_effort_count(const llama_model * model) {
+    return model->hparams.effort_steering ? (int32_t) model->hparams.n_effort : 0;
+}
+
+const char * llama_model_reasoning_effort_name(const llama_model * model, int32_t i) {
+    if (i < 0 || i >= llama_model_reasoning_effort_count(model)) {
+        return nullptr;
+    }
+    return model->hparams.effort_name[i].data();
+}
+
 int32_t llama_model_n_embd_inp(const llama_model * model) {
     return model->hparams.n_embd_inp();
 }

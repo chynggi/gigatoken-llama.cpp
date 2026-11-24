@@ -604,6 +604,13 @@ extern "C" {
 
     LLAMA_API int32_t llama_model_n_ctx_train  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
+
+    // Reasoning effort steering: the efforts the model defines (0 without steering), their names, and the
+    // steering alpha of an effort (nullptr: requests without an effort, which use the model's default effort or 0).
+    // llama_model_reasoning_effort_alpha() returns false when the model has no steering or does not define the effort.
+    LLAMA_API int32_t      llama_model_reasoning_effort_count(const struct llama_model * model);
+    LLAMA_API const char * llama_model_reasoning_effort_name (const struct llama_model * model, int32_t i);
+    LLAMA_API bool         llama_model_reasoning_effort_alpha(const struct llama_model * model, const char * effort, float * alpha);
     LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_out   (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer      (const struct llama_model * model);
@@ -1139,6 +1146,10 @@ extern "C" {
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
+
+    // Reasoning effort steering: tokens of seq_id add alpha times the model's steering vector to the output of
+    // each steered MoE layer. alpha 0 (the default) leaves the model unchanged; models without steering ignore it.
+    LLAMA_API void llama_set_reasoning_effort_alpha(struct llama_context * ctx, llama_seq_id seq_id, float alpha);
 
     // Returns whether the context is currently using causal attention
     LLAMA_API bool llama_get_causal_attn(const struct llama_context * ctx);

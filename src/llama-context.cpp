@@ -200,6 +200,7 @@ llama_context::llama_context(
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
+    cparams.effort_alpha = effort_alpha.data();
 
     cparams.n_rs_seq = params.n_rs_seq;
     if (cparams.n_rs_seq > 0 && (!llm_arch_supports_rs_rollback(model.arch) || !hparams.causal_attn)) {
@@ -1829,6 +1830,16 @@ bool llama_context::supports_state_row() const {
 
 void llama_context::set_nextn_layer_offset(int32_t offset) {
     cparams.nextn_layer_offset = offset;
+}
+
+void llama_context::set_effort_alpha(llama_seq_id seq_id, float alpha) {
+    if (seq_id < 0 || (uint32_t) seq_id >= cparams.n_seq_max) {
+        throw std::runtime_error(format("invalid seq_id %d for reasoning effort steering", seq_id));
+    }
+    if (!std::isfinite(alpha)) {
+        throw std::runtime_error("reasoning effort steering alpha must be finite");
+    }
+    effort_alpha[seq_id] = model.hparams.effort_steering ? alpha : 0.0f;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -4829,6 +4840,10 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
+}
+
+void llama_set_reasoning_effort_alpha(llama_context * ctx, llama_seq_id seq_id, float alpha) {
+    ctx->set_effort_alpha(seq_id, alpha);
 }
 
 bool llama_get_causal_attn(const llama_context * ctx) {

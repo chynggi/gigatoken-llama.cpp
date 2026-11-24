@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Iterable
 
 import torch
@@ -41,6 +42,30 @@ class Raon1Model(TextModel):
         self._experts: dict[tuple[int, str], dict[int, Tensor]] = {}
         self._mhc: dict[tuple[int, str], dict[str, Tensor]] = {}
         self._rda_layers = set(self.hparams["rda_config"]["rda_layers"])
+        self._effort_layers = self._reasoning_effort_layers()
+        self._effort_seen: set[int] = set()
+
+    # release: model.layers.<L>.moe.*, evaluation exports: model.layers.<L>.block_sparse_moe.*
+    _EFFORT_SUFFIXES = (".moe.reasoning_effort_steering", ".block_sparse_moe.reasoning_effort_steering")
+
+    _MAX_EFFORTS = 8
+
+    def _reasoning_effort_layers(self) -> set[int]:
+        # config.json "reasoning_effort_steering": {"alpha": {effort: alpha, ...}, "layers": [...], "default": effort (optional)};
+        # without it the steering vectors are dropped and the model is unchanged
+        steering = self.hparams.get("reasoning_effort_steering")
+        if not steering:
+            return set()
+        alpha, layers, default = steering.get("alpha"), steering.get("layers"), steering.get("default")
+        n_layer = self.hparams["num_hidden_layers"]
+        if (not isinstance(alpha, dict) or not 0 < len(alpha) <= self._MAX_EFFORTS
+                or any(not re.fullmatch(r"[a-z0-9_-]{1,15}", k) for k in alpha)
+                or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < float("inf") for v in alpha.values())
+                or not layers or any(type(L) is not int or not self.hparams["first_k_dense_replace"] <= L < n_layer for L in layers)
+                or (default is not None and default not in alpha)):
+            raise ValueError(f"reasoning_effort_steering needs 1-{self._MAX_EFFORTS} efforts (lowercase names up to 15 characters) "
+                             f"with non-negative alphas, MoE layers to steer and an optional default effort, got {steering}")
+        return set(layers)
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
@@ -120,13 +145,24 @@ class Raon1Model(TextModel):
         self.gguf_writer.add_hyper_connection_count(_with_default(hp, "raon_mhc_streams", 4))
         self.gguf_writer.add_hyper_connection_epsilon(_with_default(hp, "raon_mhc_selector_eps", 1e-5))
         self.gguf_writer.add_hyper_connection_magnitude(_with_default(hp, "raon_mhc_post_factor", 2.0))
+        if self._effort_layers:
+            steering = hp["reasoning_effort_steering"]
+            self.gguf_writer.add_reasoning_effort_names(list(steering["alpha"]))
+            self.gguf_writer.add_reasoning_effort_alpha(list(steering["alpha"].values()))
+            if steering.get("default") is not None:
+                self.gguf_writer.add_reasoning_effort_default(steering["default"])
+            self.gguf_writer.add_reasoning_effort_layers(sorted(self._effort_layers))
 
     def prepare_tensors(self):
         super().prepare_tensors()
         if self._experts or self._mhc:
             raise ValueError(f"Incomplete Raon-1 tensor groups: experts={list(self._experts)}, mHC={list(self._mhc)}")
+        if missing := sorted(self._effort_layers - self._effort_seen):
+            raise ValueError(f"reasoning_effort_steering lists layers {missing} without a steering vector")
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".ffn_effort_steer." in new_name:
+            return gguf.GGMLQuantizationType.F32
         if ".hc_" in new_name and not new_name.endswith("_fn.weight"):
             return gguf.GGMLQuantizationType.F32
         quantized = (gguf.LlamaFileType.MOSTLY_Q8_0, gguf.LlamaFileType.MOSTLY_TQ1_0, gguf.LlamaFileType.MOSTLY_TQ2_0)
@@ -157,6 +193,17 @@ class Raon1Model(TextModel):
             for kind, tensor in (("FN", fn), ("BASE", base), ("SCALE", scale)):
                 yield self.format_tensor_name(getattr(gguf.MODEL_TENSOR, f"{prefix}_{kind}"), bid), tensor
             del self._mhc[bid, site]
+            return
+
+        if name.endswith(self._EFFORT_SUFFIXES):
+            assert bid is not None
+            if not self._effort_layers:
+                logger.info(f"Dropping {name}: config.json has no reasoning_effort_steering")
+                return
+            if bid not in self._effort_layers or bid in self._effort_seen or tuple(data_torch.shape) != (self.hparams["hidden_size"],):
+                raise ValueError(f"Unexpected steering vector {name} {list(data_torch.shape)} for layers {sorted(self._effort_layers)}")
+            self._effort_seen.add(bid)
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_EFFORT_STEER, bid), data_torch.float()
             return
 
         if ".moe.experts." in name:

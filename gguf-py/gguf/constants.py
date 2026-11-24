@@ -304,6 +304,13 @@ class Keys:
         SCALING_YARN_BETA_FAST    = "{arch}.rope.scaling.yarn_beta_fast"
         SCALING_YARN_BETA_SLOW    = "{arch}.rope.scaling.yarn_beta_slow"
 
+    class ReasoningEffort:
+        # effort names and their steering scales (same order); without names the order is low, medium, high
+        NAMES   = "{arch}.reasoning_effort.names"
+        ALPHA   = "{arch}.reasoning_effort.alpha"
+        LAYERS  = "{arch}.reasoning_effort.layers"
+        DEFAULT = "{arch}.reasoning_effort.default"  # effort of requests without one (optional)
+
     class Activation:
         SITU_BETA        = "{arch}.activation.situ_beta"
         SITU_LINEAR_BETA = "{arch}.activation.situ_linear_beta"
@@ -1060,6 +1067,7 @@ class MODEL_TENSOR(IntEnum):
     HC_FFN_FN            = auto()
     HC_FFN_BASE          = auto()
     HC_FFN_SCALE         = auto()
+    FFN_EFFORT_STEER     = auto()
     HC_ATTN_NORM         = auto() # qwen4exp
     HC_ATTN_DOWN         = auto() # qwen4exp
     HC_ATTN_UP           = auto() # qwen4exp
@@ -2088,6 +2096,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_FFN_FN:                 "blk.{bid}.hc_ffn_fn",
     MODEL_TENSOR.HC_FFN_BASE:               "blk.{bid}.hc_ffn_base",
     MODEL_TENSOR.HC_FFN_SCALE:              "blk.{bid}.hc_ffn_scale",
+    MODEL_TENSOR.FFN_EFFORT_STEER:          "blk.{bid}.ffn_effort_steer",
     MODEL_TENSOR.HC_ATTN_NORM:              "blk.{bid}.hc_attn_norm",         # qwen4exp
     MODEL_TENSOR.HC_ATTN_DOWN:              "blk.{bid}.hc_attn_down",         # qwen4exp
     MODEL_TENSOR.HC_ATTN_UP:                "blk.{bid}.hc_attn_up",           # qwen4exp
@@ -7061,6 +7070,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EFFORT_STEER,
     ],
     MODEL_ARCH.TALKIE: [
         MODEL_TENSOR.TOKEN_EMBD,

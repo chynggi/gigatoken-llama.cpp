@@ -89,6 +89,8 @@ struct task_params {
     int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
     int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
+    float effort_alpha = 0.0f; // reasoning effort steering alpha of the request's reasoning_effort
+
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement

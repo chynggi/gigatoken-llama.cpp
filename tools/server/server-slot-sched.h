@@ -28,6 +28,9 @@ struct server_prompt {
     // TODO: slot files do not store it
     std::vector<common_adapter_lora_info> lora;
 
+    // reasoning effort steering alpha the state was computed with; a state is reused only at the same alpha
+    float effort_alpha = 0.0f;
+
     void clear() {
         tokens.clear();
         checkpoints.clear();
@@ -42,6 +45,7 @@ struct server_prompt {
             tokens.clone(),
             checkpoints,
             lora,
+            effort_alpha,
         };
     }
 
@@ -98,7 +102,7 @@ struct server_prompt_cache {
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
     // lora_new: the lora config of the new prompt, the states made with another config are skipped
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    bool load(server_prompt & prompt, const server_tokens & tokens_new, float effort_alpha, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
 };

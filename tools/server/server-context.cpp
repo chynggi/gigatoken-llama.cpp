@@ -384,8 +384,8 @@ struct server_slot {
         return true;
     }
 
-    bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens, const std::vector<common_adapter_lora_info> & lora_new) {
-        bool res = prompt_cache.load(prompt, tokens, lora_new, ctx_tgt, ctx_dft, id);
+    bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens, float effort_alpha, const std::vector<common_adapter_lora_info> & lora_new) {
+        bool res = prompt_cache.load(prompt, tokens, effort_alpha, lora_new, ctx_tgt, ctx_dft, id);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
         }
@@ -1837,7 +1837,7 @@ private:
 
         slot.prompt_save(*prompt_cache);
 
-        if (!slot.prompt_load(*prompt_cache, task.tokens, get_task_lora(task))) {
+        if (!slot.prompt_load(*prompt_cache, task.tokens, task.params.effort_alpha, get_task_lora(task))) {
             slot.prompt_clear();
         }
 
@@ -1898,6 +1898,15 @@ private:
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
         auto task_loras = get_task_lora(task);
+
+        // reasoning effort steering changes the residual from the first steered layer on:
+        // never reuse a state that was computed with another alpha
+        if (slot.prompt.effort_alpha != task.params.effort_alpha) {
+            SLT_TRC(slot, "clearing cache for reasoning effort alpha %g -> %g\n", slot.prompt.effort_alpha, task.params.effort_alpha);
+            slot.prompt.clear();
+        }
+        slot.prompt.effort_alpha = task.params.effort_alpha;
+        llama_set_reasoning_effort_alpha(ctx_tgt, slot.id, task.params.effort_alpha);
 
         // the state can come from the prompt cache, so it is compared with its own lora config, not with the one of the last task
         if (!are_lora_equal(task_loras, slot.prompt.lora)) {
@@ -5348,6 +5357,26 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
         }
 
+        // reasoning effort steering: the model's efforts select their alpha. A request without one
+        // uses the model's default effort, "none" keeps thinking off and uses its own alpha when the
+        // model defines it (0 otherwise), and an unknown effort is refused.
+        float effort_alpha = 0.0f;
+        if (ctx_server.model_tgt != nullptr && llama_model_reasoning_effort_count(ctx_server.model_tgt) > 0) {
+            const llama_model * model = ctx_server.model_tgt;
+            const json effort = json_value(data, "reasoning_effort", json());
+            const std::string name = effort.is_string() ? effort.get<std::string>() : "";
+            const bool known = effort.is_null()
+                    ? llama_model_reasoning_effort_alpha(model, nullptr, &effort_alpha)
+                    : (effort.is_string() && llama_model_reasoning_effort_alpha(model, name.c_str(), &effort_alpha));
+            if (!known && name != "none") {
+                std::string names;
+                for (int32_t i = 0; i < llama_model_reasoning_effort_count(model); ++i) {
+                    names += std::string(i ? ", " : "") + llama_model_reasoning_effort_name(model, i);
+                }
+                throw std::invalid_argument("reasoning_effort must be one of none, " + names + "; got " + effort.dump());
+            }
+        }
+
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
         for (size_t i = 0; i < inputs.size(); i++) {
@@ -5361,6 +5390,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     params,
                     meta->logit_bias_eog,
                     data);
+
+            task.params.effort_alpha = effort_alpha;
 
             task.apply_chat_session(chat_session);
 

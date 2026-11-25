@@ -164,9 +164,9 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
-    // a prompt made with another lora config is cleared before the new one starts, so it counts as empty
-    const bool is_empty = prompt.tokens.empty() || lora_should_clear_cache(prompt.lora, lora_new);
+bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, float effort_alpha, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+    // a prompt made with another lora config or steering alpha is cleared before the new one starts, so it counts as empty
+    const bool is_empty = prompt.tokens.empty() || prompt.effort_alpha != effort_alpha || lora_should_clear_cache(prompt.lora, lora_new);
 
     int lcp_best = is_empty ? 0 : prompt.tokens.get_common_prefix(tokens_new);
 
@@ -179,6 +179,11 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
+        if (it->prompt.effort_alpha != effort_alpha) {
+            SRV_TRC("   - prompt with length %7zu, skipping, other reasoning effort\n", it->prompt.tokens.size());
+            continue;
+        }
+
         if (lora_should_clear_cache(it->prompt.lora, lora_new)) {
             SRV_TRC("   - prompt with length %7zu, skipping, other lora config\n", it->prompt.tokens.size());
             continue;

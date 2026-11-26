@@ -4,6 +4,10 @@
 
 #include "llama-memory-recurrent.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
 void llama_model_raon1_mini::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,    hparams.n_embd_head_k_mla_impl);
@@ -44,6 +48,46 @@ void llama_model_raon1_mini::load_arch_hparams(llama_model_loader & ml) {
 
     // The Raon router normalizes selected scores by sum(scores) + 1e-20.
     hparams.expert_weights_norm_eps = 1e-20f;
+
+    std::vector<float> effort_alpha;
+    std::vector<uint32_t> effort_layers;
+    hparams.effort_steering = ml.get_arr(LLM_KV_REASONING_EFFORT_ALPHA, effort_alpha, false);
+    if (hparams.effort_steering) {
+        // without names the alphas are for low, medium and high
+        std::vector<std::string> effort_names;
+        if (!ml.get_arr(LLM_KV_REASONING_EFFORT_NAMES, effort_names, false)) {
+            effort_names = { "low", "medium", "high" };
+        }
+        ml.get_arr(LLM_KV_REASONING_EFFORT_LAYERS, effort_layers, true);
+        if (effort_alpha.empty() || effort_alpha.size() > LLAMA_MAX_EFFORTS || effort_names.size() != effort_alpha.size() || effort_layers.empty()) {
+            throw std::runtime_error(format("invalid Raon-1 hyperparameters: reasoning_effort needs 1 to %d named alphas and the steered layers", LLAMA_MAX_EFFORTS));
+        }
+        hparams.n_effort = effort_alpha.size();
+        for (size_t i = 0; i < effort_alpha.size(); ++i) {
+            if (!std::isfinite(effort_alpha[i]) || effort_alpha[i] < 0.0f) {
+                throw std::runtime_error(format("invalid Raon-1 hyperparameters: reasoning_effort alpha %g", effort_alpha[i]));
+            }
+            if (effort_names[i].empty() || effort_names[i].size() >= LLAMA_MAX_EFFORT_NAME) {
+                throw std::runtime_error(format("invalid Raon-1 hyperparameters: reasoning_effort name '%s'", effort_names[i].c_str()));
+            }
+            hparams.effort_alpha[i] = effort_alpha[i];
+            std::copy(effort_names[i].begin(), effort_names[i].end(), hparams.effort_name[i].begin());
+        }
+        std::string effort_default;
+        if (ml.get_key(LLM_KV_REASONING_EFFORT_DEFAULT, effort_default, false)) {
+            const auto it = std::find(effort_names.begin(), effort_names.end(), effort_default);
+            if (it == effort_names.end()) {
+                throw std::runtime_error(format("invalid Raon-1 hyperparameters: reasoning_effort default '%s' is not an effort", effort_default.c_str()));
+            }
+            hparams.effort_default = it - effort_names.begin();
+        }
+        for (uint32_t il : effort_layers) {
+            if (il < hparams.n_layer_dense_lead || il >= hparams.n_layer()) {
+                throw std::runtime_error(format("invalid Raon-1 hyperparameters: reasoning_effort layer %u is not a MoE layer", il));
+            }
+            hparams.effort_layer[il] = true;
+        }
+    }
 
     auto require = [](bool ok, const std::string & what) {
         if (!ok) {
@@ -159,6 +203,9 @@ void llama_model_raon1_mini::load_arch_tensors(llama_model_loader &) {
                 layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, 0);
                 layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, 0);
                 layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp}, 0);
+            }
+            if (hparams.effort_layer[i]) {
+                layer.ffn_effort_steer = create_tensor(tn(LLM_TENSOR_FFN_EFFORT_STEER, "weight", i), {n_embd}, 0);
             }
         }
     }
@@ -421,6 +468,7 @@ llama_model_raon1_mini::graph::graph(const llm_graph_params & params) : llm_buil
     auto * inp_rs = inputs->get_recr();
     auto * inp_attn = inputs->get_attn();
     auto * out_ids = build_inp_out_ids();
+    auto * inp_effort = hparams.effort_steering ? build_inp_effort() : nullptr;
     GGML_ASSERT(ubatch.n_seqs != 0 && ubatch.equal_seqs());
     GGML_ASSERT(ubatch.n_tokens == ubatch.n_seq_tokens*ubatch.n_seqs);
 
@@ -460,7 +508,8 @@ llama_model_raon1_mini::graph::graph(const llm_graph_params & params) : llm_buil
                         layer.ffn_down_shexp, il);
                 moe = ggml_add(ctx0, moe, shared);
             }
-            cur = moe;
+            // reasoning effort steering: the MoE output (shared + routed) plus alpha * vector, before the residual
+            cur = build_effort_steer(moe, layer.ffn_effort_steer, inp_effort, il);
         }
         inp = build_hc_post(inp, cur, post, comb, il);
         inp = build_cvec(inp, il);

@@ -164,9 +164,9 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, int & lcp) const {
-    // a prompt made with another lora config is cleared before the new one starts, so it counts as empty
-    const bool is_empty = prompt.tokens.empty() || lora_should_clear_cache(prompt.lora, lora_new);
+std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_better(const server_prompt & prompt, const server_tokens & tokens_new, float effort_alpha, const std::vector<common_adapter_lora_info> & lora_new, int & lcp) const {
+    // a prompt made with another lora config or steering alpha is cleared before the new one starts, so it counts as empty
+    const bool is_empty = prompt.tokens.empty() || prompt.effort_alpha != effort_alpha || lora_should_clear_cache(prompt.lora, lora_new);
 
     lcp = is_empty ? 0 : prompt.tokens.get_common_prefix(tokens_new);
 
@@ -179,6 +179,10 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.cbegin(); it != states.cend(); ++it) {
+        if (it->prompt.effort_alpha != effort_alpha) {
+            SRV_TRC("   - prompt with length %7zu, skipping, other reasoning effort\n", it->prompt.tokens.size());
+            continue;
+        }
         if (lora_should_clear_cache(it->prompt.lora, lora_new)) {
             SRV_TRC("   - prompt with length %7zu, skipping, other lora config\n", it->prompt.tokens.size());
             continue;
@@ -212,16 +216,16 @@ std::list<server_prompt_cache_state>::const_iterator server_prompt_cache::find_b
     return it_best;
 }
 
-bool server_prompt_cache::has_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new) const {
+bool server_prompt_cache::has_better(const server_prompt & prompt, const server_tokens & tokens_new, float effort_alpha, const std::vector<common_adapter_lora_info> & lora_new) const {
     int lcp = 0;
 
-    return find_better(prompt, tokens_new, lora_new, lcp) != states.cend();
+    return find_better(prompt, tokens_new, effort_alpha, lora_new, lcp) != states.cend();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, float effort_alpha, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
     int lcp_best = 0;
 
-    const auto it_found = find_better(prompt, tokens_new, lora_new, lcp_best);
+    const auto it_found = find_better(prompt, tokens_new, effort_alpha, lora_new, lcp_best);
 
     // an empty erase gives a mutable iterator to the same entry, its prompt is moved out below
     const auto it_best = states.erase(it_found, it_found);
@@ -451,7 +455,7 @@ server_slot_plan server_slot_sched::select(const std::vector<server_slot_info> &
 
     // the checks above only tell if the outgoing state is worth saving
     // the cache can still hold a better start for this task, so ask it
-    update_cache = update_cache || prompt_cache->has_better(*ret->prompt, task.tokens, lora);
+    update_cache = update_cache || prompt_cache->has_better(*ret->prompt, task.tokens, task.params.effort_alpha, lora);
 
     return { ret->id, update_cache };
 }

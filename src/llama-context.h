@@ -140,6 +140,7 @@ struct llama_context {
     bool supports_state_row() const;
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
+    void set_effort_alpha(llama_seq_id seq_id, float alpha);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
@@ -339,6 +340,8 @@ private:
     const llama_model & model;
 
     llama_cparams cparams;
+
+    std::array<float, LLAMA_MAX_SEQ> effort_alpha = {}; // cparams.effort_alpha
 
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;

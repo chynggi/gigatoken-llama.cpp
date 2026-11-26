@@ -589,6 +589,7 @@ struct llama_layer {
     struct ggml_tensor * hc_ffn_fn    = nullptr;
     struct ggml_tensor * hc_ffn_base  = nullptr;
     struct ggml_tensor * hc_ffn_scale = nullptr;
+    struct ggml_tensor * ffn_effort_steer = nullptr; // F32 [n_embd], reasoning effort steering
     struct ggml_tensor * attn_comp_wkv   = nullptr;
     struct ggml_tensor * attn_comp_wgate = nullptr;
     struct ggml_tensor * attn_comp_ape   = nullptr;

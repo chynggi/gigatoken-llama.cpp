@@ -1177,6 +1177,18 @@ class GGUFWriter:
     def add_hyper_connection_magnitude(self, value: float) -> None:
         self.add_float32(Keys.HyperConnection.MAGNITUDE.format(arch=self.arch), value)
 
+    def add_reasoning_effort_names(self, values: Sequence[str]) -> None:
+        self.add_array(Keys.ReasoningEffort.NAMES.format(arch=self.arch), list(values))
+
+    def add_reasoning_effort_default(self, value: str) -> None:
+        self.add_string(Keys.ReasoningEffort.DEFAULT.format(arch=self.arch), value)
+
+    def add_reasoning_effort_alpha(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.ReasoningEffort.ALPHA.format(arch=self.arch), [float(v) for v in values])
+
+    def add_reasoning_effort_layers(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.ReasoningEffort.LAYERS.format(arch=self.arch), [int(v) for v in values])
+
     def add_hyper_connection_low_rank(self, value: int) -> None:
         self.add_uint32(Keys.HyperConnection.LOW_RANK.format(arch=self.arch), value)
 

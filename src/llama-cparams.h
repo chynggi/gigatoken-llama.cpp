@@ -13,6 +13,7 @@ struct llama_cparams {
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;
+    const float * effort_alpha = nullptr; // [n_seq_max] reasoning effort steering alpha per sequence (owned by the context)
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
     bool     rs_replay;       // roll back by replaying kept tokens instead of keeping n_rs_seq snapshots
     uint32_t n_outputs_max;   // max outputs supported by the context

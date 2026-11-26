@@ -12,6 +12,8 @@
 #define LLAMA_MAX_EXPERTS 1024 // Kimi K3
 #define LLAMA_MAX_PLE_NGRAM 8  // qwen4exp, deepseek41 (all hash modules)
 #define LLAMA_MAX_PLE_HEADS 64 // qwen4exp, deepseek41 (all hash modules)
+#define LLAMA_MAX_EFFORTS 8
+#define LLAMA_MAX_EFFORT_NAME 16 // including the terminating zero
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
@@ -403,6 +405,14 @@ struct llama_hparams {
 
     // scale of the hyper-connection post gate (DeepSeek-V4 hardcodes 2.0)
     float    hc_magnitude = 0.0f;
+
+    // reasoning effort steering: effort names and their alphas; the steered layers carry ffn_effort_steer
+    bool     effort_steering = false;
+    uint32_t n_effort        = 0;
+    int32_t  effort_default  = -1; // index of the effort of requests without one, -1: alpha 0
+    std::array<std::array<char, LLAMA_MAX_EFFORT_NAME>, LLAMA_MAX_EFFORTS> effort_name = {};
+    std::array<float, LLAMA_MAX_EFFORTS> effort_alpha = {};
+    std::array<bool, LLAMA_MAX_LAYERS> effort_layer = {};
 
     uint32_t ple_ngram_size      = 0;
     uint32_t ple_heads_per_ngram = 0;

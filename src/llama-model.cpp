@@ -393,10 +393,10 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_linear(params);
         case LLM_ARCH_KIMI_K3:
             return new llama_model_kimi_k3(params);
-        case LLM_ARCH_RAON1:
-            return new llama_model_raon1(params);
         case LLM_ARCH_KIMI_K31:
             return new llama_model_kimi_k31(params);
+        case LLM_ARCH_RAON1_MINI:
+            return new llama_model_raon1_mini(params);
         case LLM_ARCH_GLM5_NEXT:
             return new llama_model_glm5_next(params);
         case LLM_ARCH_STEP35:
@@ -1750,8 +1750,12 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     }
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
-    ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
-    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,       hparams.rope_scaling_alpha, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR,      hparams.rope_attn_factor,   false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,            hparams.rope_scaling_alpha, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,  hparams.yarn_ext_factor,    false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor,   false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast,     false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow,     false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
@@ -3395,75 +3399,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr);
                 }
             } break;
-        case LLM_ARCH_HY_V4_FLASH:
-            {
-                GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
-
-                if (hparams.indexer_top_k == 0) {
-                    // without an indexer the sparse layers attend their whole context
-                    llama_kv_cache_iswa::layer_filter_cb filter = [&](uint32_t il) {
-                        return il < hparams.n_layer();
-                    };
-
-                    // the draft context holds the MTP block alone
-                    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
-                        if (hparams.n_layer_nextn == 0) {
-                            throw std::runtime_error("hy_v4_flash MTP requires the draft block, convert without --no-mtp");
-                        }
-                        filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
-                    }
-
-                    res = new llama_kv_cache_iswa(
-                            *this,
-                            params.no_alloc,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
-                            cparams.offload_kqv,
-                            params.swa_full,
-                            cparams.kv_unified,
-                            cparams.n_ctx_seq,
-                            cparams.n_seq_max,
-                            cparams.n_ubatch,
-                            nullptr,
-                            filter,
-                            nullptr,
-                            nullptr);
-                } else {
-                    // the indexer lives on the sparse layers, which are the non-SWA ones
-                    llama_memory_idx_iswa::layer_filter_cb filter     = [&](uint32_t il) {
-                        return il < hparams.n_layer();
-                    };
-                    llama_memory_idx_iswa::layer_filter_cb filter_idx = [&](uint32_t il) {
-                        return il < hparams.n_layer() && !hparams.is_swa(il) && hparams.is_indexer_full(il);
-                    };
-
-                    // the draft context holds the MTP block alone, a sparse layer with its own indexer
-                    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
-                        if (hparams.n_layer_nextn == 0) {
-                            throw std::runtime_error("hy_v4_flash MTP requires the draft block, convert without --no-mtp");
-                        }
-                        filter     = [&](uint32_t il) { return il >= hparams.n_layer(); };
-                        filter_idx = [&](uint32_t il) { return il >= hparams.n_layer(); };
-                    }
-
-                    res = new llama_memory_idx_iswa(
-                            *this,
-                            params.no_alloc,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
-                            cparams.offload_kqv,
-                            params.swa_full,
-                            cparams.kv_unified,
-                            cparams.n_ctx_seq,
-                            cparams.n_seq_max,
-                            cparams.n_ubatch,
-                            std::move(filter),
-                            std::move(filter_idx));
-                }
-            } break;
         case LLM_ARCH_DOTS3NOTE:
+        case LLM_ARCH_HY_V4_FLASH:
             {
                 GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
 
@@ -4014,8 +3951,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_METIS16:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
-        case LLM_ARCH_RAON1:
         case LLM_ARCH_KIMI_K31:
+        case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STARCODER:
         case LLM_ARCH_INKLING2:
@@ -4082,8 +4019,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         // VL files carry rope sections and NeoX ordered rope rows (see conversion/hy_v4.py).
         case LLM_ARCH_HY_V4:
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_IMROPE : LLAMA_ROPE_TYPE_NORM;
+        // HY_V4_FLASH keeps the interleaved rope rows and reorders them in the graph for M-RoPE (see src/models/hy-v4-flash.cpp)
         case LLM_ARCH_HY_V4_FLASH:
-            return LLAMA_ROPE_TYPE_NORM;
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_IMROPE : LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
         case LLM_ARCH_FALCON:

@@ -2258,6 +2258,20 @@ struct test_unary : public test_case {
 
 };
 
+struct test_unary_softplus_neg : public test_unary {
+    test_unary_softplus_neg() : test_unary(GGML_UNARY_OP_SOFTPLUS) {}
+
+    std::string vars() override {
+        return test_unary::vars() + ",neg";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -16.6f, -16.0f);
+        }
+    }
+};
+
 // GGML_OP_GLU
 struct test_glu : public test_case {
     const ggml_glu_op op;
@@ -5869,17 +5883,20 @@ struct test_gated_delta_net_replay : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             if (ggml_is_view_op(t->op)) { continue; }
             if (strcmp(t->name, "g") == 0) {
-                init_tensor_uniform(t, -20.0f, -1e-4f);
+                // Keep the effect of replay visible in the first chunk.
+                init_tensor_uniform(t, n_seq_tokens >= 64 ? -0.125f : -20.0f, -1e-4f);
             } else if (strcmp(t->name, "beta") == 0) {
                 init_tensor_uniform(t, 0.0f, 1.0f);
             } else if (strcmp(t->name, "v") == 0) {
                 init_tensor_uniform(t, -0.3f, 5.0f);
             } else if (strcmp(t->name, "n_rep") == 0) {
                 std::vector<int32_t> data(n_seqs);
-                for (auto & x : data) {
-                    x = std::uniform_int_distribution<int32_t>(0, n_pend)(rng);
+                for (int64_t i = 0; i < n_seqs; ++i) {
+                    data[i] = n_seq_tokens >= 64
+                        ? (i % 2 == 0 ? n_pend : 0)
+                        : std::uniform_int_distribution<int32_t>(0, n_pend)(rng);
                 }
-                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int32_t));
             } else if (strcmp(t->name, "pend_k") == 0) {
                 // unit rows, as the l2 norm leaves them
                 std::vector<float> data(ggml_nelements(t));
@@ -11774,7 +11791,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::default_random_engine rng(0);
 
     // unary ops
-    // TODO: add GGML_UNARY_OP_SOFTPLUS test that is sensitive to using `log1p(exp(x))` vs `log(exp(x) + 1)`
+    test_cases.emplace_back(new test_unary_softplus_neg());
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
         for (int v : {0, 1}) {
             for (int op = 0; op < GGML_UNARY_OP_COUNT; op++) {
@@ -13289,6 +13306,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 #endif
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 31, 509, 2051, {1, 1}, {1, 1}));
+
+    // a few rows of a few columns against many rows, batched (the weighted sum over the depth states of Inkling 2)
+    for (int64_t m : {1, 3, 8, 33}) {
+        for (int64_t k : {2, 5, 24, 31}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, m, 2304, k, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, m, 97, k, {7, 2}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, m, 33, k, {2, 3}, {2, 1}));
+        }
+    }
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
 
@@ -13882,6 +13908,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4,      1, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4,   1023, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {643251, 3, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 65537, 1, 1}));
 
     for (float max_bias : {0.0f, 8.0f}) {
         for (float scale : {1.0f, 0.1f}) {
@@ -14249,6 +14276,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_roll(3, -2, 1, -1, true));
     test_cases.emplace_back(new test_roll(0, 0, 0, 0, false, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_roll(0, 0, 0, 0, true));
     test_cases.emplace_back(new test_roll(256, 0, 0, 0, false, {257, 1, 1, 1}));
     test_cases.emplace_back(new test_roll(-16, 6, -2, 1, false, {17, 7, 3, 2}));
     test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {42, 512, 1, 1}));
@@ -14886,11 +14914,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_gated_delta_net_replay(4, 32,  1, 2, 2, false, 3, keep));
         test_cases.emplace_back(new test_gated_delta_net_replay(4, 64,  3, 2, 1, true,  4, keep));
     }
-    // prefill sized: the replay runs before the chunked kernels (CUDA from 64 tokens, HIP from 2048)
+    // Prefill sized to exercise chunked kernels that support replay.
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,   65, 1, 1, false, 4, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,  257, 1, 3, false, 4, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,  513, 2, 2, false, 8, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128, 2048, 1, 3, false, 4, false));
+    // RDNA3 needs at least 4096 tokens for the chunked kernel.
+    test_cases.emplace_back(new test_gated_delta_net_replay( 4, 128, 4097, 2, 1, false, 4, false));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, false, true));
@@ -14998,7 +15028,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // lightning_indexer
     for (int kv : { 256 }) {
         for (int bs : { 1, 512 }) {
-            for (int nh : { 4, 32, 64 }) {
+            for (int nh : { 4, 16, 32, 64 }) {
                 for (auto [ns, nm] : { std::pair{1, 1}, std::pair{4, 4}, std::pair{4, 1} }) {
                     for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
                         test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, nm, type_K));
@@ -15263,6 +15293,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // d_kv=64 -> scale 1/sqrt(64)=0.125, n_head=16. decode n_q=1; prefill n_q=512.
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, { 512,   1, 16, 1}, true, false, GGML_TYPE_F16, {1, 1}, 0.125f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, { 512, 512, 16, 1}, true, false, GGML_TYPE_F16, {1, 1}, 0.125f, 0.0f));
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 65537, 1, 1}));
 
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {256, 1, 1, 1}));
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {256, 512, 1, 1}));
@@ -15623,6 +15654,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1})); // generate
     test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1}, true));  // prefill
     test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1}, true));  // generate
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 128, 8, 512, 1)); // Nemotron-3-Puzzle prefill
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 128, 8, 1,   1)); // Nemotron-3-Puzzle generate
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 512, 1)); // prefill
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 1,   1)); // generate
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 512, 1)); // Nemotron-9B prefill
@@ -15684,7 +15717,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // lightning_indexer
     for (int kv : { 256, 4096, 65536 }) {
         for (int bs : { 1, 512, 2048 }) {
-            for (int nh : { 4, 32, 64 }) {
+            for (int nh : { 4, 16, 32, 64 }) {
                 for (int ns : { 1, 4 }) {
                     for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
                         test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, ns, type_K));

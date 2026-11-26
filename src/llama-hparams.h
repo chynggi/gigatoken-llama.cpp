@@ -146,7 +146,7 @@ struct llama_hparams {
     float f_norm_eps;
     float f_norm_rms_eps;
     float f_norm_group_eps;
-    float f_norm_rms_eps_latent = 0.0f; // RMS norm of the MLA q/kv latents (Raon-1)
+    float f_norm_rms_eps_latent = 0.0f; // RMS norm of the MLA q/kv latents (Raon-1 mini)
 
     // post norms use their own epsilon
     float f_post_norm_eps = 0.0f;
@@ -321,7 +321,7 @@ struct llama_hparams {
     // default Qwen3-style block (fused QKV, softplus output gate, per-layer-type RoPE)
     // is selected by the `decoder_arch` key -- see llama_model_dflash::load_arch_hparams.
     bool     dflash_decoder_laguna   = false;
-
+    bool     dspark_f_rnn            = false; // rnn markov head reads f_rnn from embd_state
     uint32_t lilicorr_hidden_size    = 0;
     uint32_t lilicorr_candidate_topk = 0;
     uint32_t lilicorr_num_heads      = 0;

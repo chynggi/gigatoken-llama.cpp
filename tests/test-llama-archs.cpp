@@ -299,9 +299,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
-            || arch == LLM_ARCH_RAON1
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4
@@ -388,7 +388,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
             arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_KIMI_K31 ||
-            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1 || arch == LLM_ARCH_HY_V4_FLASH
+            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_HY_V4_FLASH || arch == LLM_ARCH_RAON1_MINI
             ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
@@ -400,7 +400,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
                     : (il == 1 ? 0 : n_head));
         }
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
-        if (arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1) {
+        if (arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1_MINI) {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
             // the MLA cache holds one latent head
             for (uint32_t & n : n_head_per_layer) {
@@ -441,8 +441,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
-            || arch == LLM_ARCH_RAON1
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
             || arch == LLM_ARCH_HY_V4_FLASH
@@ -551,7 +551,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, false);
     }
 
-    if (arch == LLM_ARCH_RAON1) {
+    if (arch == LLM_ARCH_RAON1_MINI) {
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 1.0f);
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, true);
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT, uint32_t(4));
@@ -616,6 +616,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     } else if (arch == LLM_ARCH_HY_V4) {
         // text-only hy_v4 files carry no sections, keep the normal rope path
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({0, 0, 0, 0}));
+    } else if (arch == LLM_ARCH_HY_V4_FLASH) {
+        // the published files carry the VL sections, so the text model runs the M-RoPE path
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({12, 10, 10, 0}));
     } else {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     }
@@ -1224,8 +1227,8 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
-        case LLM_ARCH_RAON1:
         case LLM_ARCH_KIMI_K31:
+        case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:

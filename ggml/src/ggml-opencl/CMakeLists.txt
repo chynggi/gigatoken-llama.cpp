@@ -300,6 +300,7 @@ set(GGML_OPENCL_KERNELS
     gemm_coopk_q4_k_q8_1_dp4a
     gemm_coopk_q4_k_q8_1_dp4a_bin_c8
     gemm_coopk_q6_k_q8_1_dp4a
+    gemm_coopk_q6_k_q8_1_dp4a_bin_c8
     pack_b_f16_coopmat
     gemm_noshuffle_q4_0_f32_coopmat
     gemm_noshuffle_q5_0_f32_coopmat
@@ -420,7 +421,7 @@ set(GGML_OPENCL_KERNELS
 )
 
 if (GGML_OPENCL_USE_ADRENO_KERNELS)
-    list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8 sdpa_xmem_f32_f16_os8)
+    list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8 sdpa_xmem_f32_f16_os8 gemm_moe_mxfp4_f32_ns_coopmat gemm_moe_q4_0_f32_ns_coopmat gemm_moe_q4_1_f32_ns_coopmat gemm_moe_q5_0_f32_ns_coopmat gemm_moe_q5_1_f32_ns_coopmat gemm_moe_q4_k_f32_ns_coopmat gemm_moe_q5_k_f32_ns_coopmat gemm_moe_q6_k_f32_ns_coopmat)
 endif ()
 
 foreach (K ${GGML_OPENCL_KERNELS})

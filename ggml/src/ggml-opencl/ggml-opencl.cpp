@@ -1219,6 +1219,15 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_moe_q4_k_q8_1_dp4a_bin = nullptr;   // binary dp4a (int8) q4_k MoE prefill GEMM
     cl_kernel kernel_gemm_moe_q6_k_q8_1_dp4a_bin = nullptr;    // binary dp4a (int8) q6_k MoE prefill GEMM
     cl_kernel kernel_moe_reorder_b;
+    cl_kernel kernel_moe_reorder_b_f16 = nullptr;                 // f16 B for the coopmat mxfp4 MoE GEMM
+    cl_kernel kernel_gemm_moe_mxfp4_f32_ns_coopmat = nullptr;     // cl_qcom_kernel_cooperative_matrix mxfp4 MoE prefill GEMM, A850 only
+    cl_kernel kernel_gemm_moe_q4_0_f32_ns_coopmat = nullptr;   // cl_qcom_kernel_cooperative_matrix q4_0 MoE prefill GEMM, A850 only
+    cl_kernel kernel_gemm_moe_q4_1_f32_ns_coopmat = nullptr;   // cl_qcom_kernel_cooperative_matrix q4_1 MoE prefill GEMM, A850 only
+    cl_kernel kernel_gemm_moe_q5_0_f32_ns_coopmat = nullptr;   // cl_qcom_kernel_cooperative_matrix q5_0 MoE prefill GEMM, A850 only
+    cl_kernel kernel_gemm_moe_q5_1_f32_ns_coopmat = nullptr;   // cl_qcom_kernel_cooperative_matrix q5_1 MoE prefill GEMM, A850 only
+    cl_kernel kernel_gemm_moe_q4_k_f32_ns_coopmat = nullptr;   // cl_qcom_kernel_cooperative_matrix q4_k MoE prefill GEMM, A850 only
+    cl_kernel kernel_gemm_moe_q5_k_f32_ns_coopmat = nullptr;   // cl_qcom_kernel_cooperative_matrix q5_k MoE prefill GEMM, A850 only
+    cl_kernel kernel_gemm_moe_q6_k_f32_ns_coopmat = nullptr;   // cl_qcom_kernel_cooperative_matrix q6_k MoE prefill GEMM, A850 only
     cl_kernel kernel_moe_histogram, kernel_moe_scan, kernel_moe_fill, kernel_moe_scatter;
     cl_kernel kernel_moe_scatter_stable = nullptr;   // deterministic slot assignment
     cl_kernel kernel_moe_zero_dst;
@@ -1529,13 +1538,18 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_coopk_q6_k_q8_1_dp4a_c2 = nullptr;
     int       nsg_coopk_dp4a_q6_k  = 8;
     int       rows_coopk_dp4a_q6_k = 4;
+    cl_kernel kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8 = nullptr;
+    cl_kernel kernel_quant_a_q8_1_k4h = nullptr;
+    int       nsg_coopk_dp4a_q6_k_bin_c8 = 4;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
     ~ggml_backend_opencl_context() {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         for (cl_kernel kernel : {
                 kernel_gemm_coopk_q4_k_q8_1_dp4a_bin_c8,
-                kernel_quant_a_q8_1_k4
+                kernel_quant_a_q8_1_k4,
+                kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8,
+                kernel_quant_a_q8_1_k4h
             }
         ) {
             if (kernel != nullptr) {
@@ -1949,6 +1963,46 @@ static void load_cl_kernel_coopk_q4_k_bin_c8(ggml_backend_opencl_context * backe
     backend_ctx->kernel_quant_a_q8_1_k4 = quant;
 }
 
+static void load_cl_kernel_coopk_q6_k_bin_c8(ggml_backend_opencl_context * backend_ctx) {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+    const std::string kernel_src {
+        #include "gemm_coopk_q6_k_q8_1_dp4a_bin_c8.cl.h"
+    };
+#else
+    const std::string kernel_src = read_file("gemm_coopk_q6_k_q8_1_dp4a_bin_c8.cl");
+#endif
+    cl_program program = ggml_cl_build_program_coopk(backend_ctx, kernel_src.c_str(),
+        "kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8", backend_ctx->kernel_compile_opts,
+        backend_ctx->nsg_coopk_dp4a_q6_k_bin_c8, false);
+    if (program == nullptr) {
+        return;
+    }
+
+    cl_int err;
+
+    cl_kernel gemm = clCreateKernel(program, "kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8", &err);
+    if (err != CL_SUCCESS) {
+        CL_CHECK(clReleaseProgram(program));
+        return;
+    }
+
+    cl_kernel quant = clCreateKernel(program, "kernel_quant_a_q8_1_k4h", &err);
+    CL_CHECK(clReleaseProgram(program));
+    if (err != CL_SUCCESS) {
+        CL_CHECK(clReleaseKernel(gemm));
+        return;
+    }
+
+    if (backend_ctx->get_kernel_workgroup_size(quant) < 64) {
+        CL_CHECK(clReleaseKernel(gemm));
+        CL_CHECK(clReleaseKernel(quant));
+        return;
+    }
+
+    backend_ctx->kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8 = gemm;
+    backend_ctx->kernel_quant_a_q8_1_k4h = quant;
+}
+
 static void ggml_cl_coopk_build_narrow(ggml_backend_opencl_context * backend_ctx,
                                        const std::string & kernel_src, const char * kernel_name,
                                        int rows, int & nsg, cl_kernel & kernel_c4, cl_kernel & kernel_c2) {
@@ -2065,6 +2119,15 @@ static void load_cl_kernels_gemm_coopk(ggml_backend_opencl_context * backend_ctx
                                  backend_ctx->rows_coopk_dp4a_q6_k, backend_ctx->nsg_coopk_dp4a_q6_k,
                                  backend_ctx->kernel_gemm_coopk_q6_k_q8_1_dp4a_c4,
                                  backend_ctx->kernel_gemm_coopk_q6_k_q8_1_dp4a_c2);
+
+        static const bool use_coopk_bin = [] {
+            const char * env = getenv("GGML_OPENCL_COOPK_Q6_K_BIN");
+            return !env || !*env || atoi(env) != 0;
+        }();
+
+        if (use_adreno_bin_kernels(backend_ctx) && use_coopk_bin) {
+            load_cl_kernel_coopk_q6_k_bin_c8(backend_ctx);
+        }
         GGML_LOG_CONT(".");
     }
 }
@@ -2194,6 +2257,191 @@ static void load_cl_kernels_coopmat(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
         if (prog) {
             CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q6_k_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q6_k_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_mxfp4_f32_ns_coopmat
+    // built only on A850 (see the check above), a failed build is not fatal.
+    backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_mxfp4_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_mxfp4_f32_ns_coopmat.cl");
+#endif
+        // the router buffers are sub-buffers; read through texture promotion they give wrong values
+        std::string coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_mxfp4_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+    // gemm_moe_q4_0_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->kernel_gemm_moe_q4_0_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q4_0_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q4_0_f32_ns_coopmat.cl");
+#endif
+        std::string q4_0_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q4_0_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_q4_0_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q4_0_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q4_1_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->kernel_gemm_moe_q4_1_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q4_1_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q4_1_f32_ns_coopmat.cl");
+#endif
+        std::string q4_1_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q4_1_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_q4_1_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q4_1_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q5_0_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->kernel_gemm_moe_q5_0_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q5_0_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q5_0_f32_ns_coopmat.cl");
+#endif
+        std::string q5_0_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q5_0_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_q5_0_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q5_0_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q5_1_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->kernel_gemm_moe_q5_1_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q5_1_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q5_1_f32_ns_coopmat.cl");
+#endif
+        std::string q5_1_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q5_1_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_q5_1_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q5_1_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q4_k_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->kernel_gemm_moe_q4_k_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q4_k_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q4_k_f32_ns_coopmat.cl");
+#endif
+        std::string q4_k_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q4_k_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_q4_k_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q4_k_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q5_k_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->kernel_gemm_moe_q5_k_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q5_k_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q5_k_f32_ns_coopmat.cl");
+#endif
+        std::string q5_k_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q5_k_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_q5_k_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q5_k_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q6_k_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->kernel_gemm_moe_q6_k_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q6_k_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q6_k_f32_ns_coopmat.cl");
+#endif
+        std::string q6_k_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q6_k_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_moe_q6_k_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q6_k_f32_ns_coopmat", &err), err));
             CL_CHECK(clReleaseProgram(prog));
             GGML_LOG_CONT(".");
         }
@@ -7845,6 +8093,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), CL_moe_compile_opts);
 
         CL_CHECK((backend_ctx->kernel_moe_reorder_b = clCreateKernel(prog, "kernel_moe_reorder_b", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_reorder_b_f16 = clCreateKernel(prog, "kernel_moe_reorder_b_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -10831,6 +11080,72 @@ static bool ggml_opencl_can_fuse_moe_bias_glu(const struct ggml_cgraph * cgraph,
     return true;
 }
 
+// Run a cl_qcom_kernel_cooperative_matrix MoE GEMM: f16 reorder of the activations, then the GEMM.
+// The weight buffers come first in the kernel args, in the order of the ns kernel of the same type.
+static void ggml_cl_moe_gemm_coopmat(
+        ggml_backend_opencl_context * backend_ctx, cl_kernel kernel, std::initializer_list<cl_mem> weights,
+        cl_mem sub_buf_src1_pre, cl_mem buf_src2, cl_mem buf_src2_emap,
+        cl_mem dst_data, cl_ulong offsetd, size_t n_dst, const ggml_tensor * dst,
+        int ne00, int ne01, unsigned short map_ratio, int max_post_router_tile, int n_tile_size) {
+    cl_int status;
+
+    // f16 reordered activations, read by the coopmat kernel as a buffer
+    cl_buffer_region region;
+    region.origin = 0;
+    region.size = (size_t)ne00 * max_post_router_tile * n_tile_size * sizeof(cl_half);
+    backend_ctx->prealloc_act_trans.allocate(backend_ctx->context, region.size);
+    cl_mem buf_src1_reordered = clCreateSubBuffer(backend_ctx->prealloc_act_trans.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+    CL_CHECK(status);
+
+    cl_kernel rk = backend_ctx->kernel_moe_reorder_b_f16;
+    unsigned int ne00_u = ne00;
+    unsigned int tile_u = n_tile_size;
+    CL_CHECK(clSetKernelArg(rk, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
+    CL_CHECK(clSetKernelArg(rk, 1, sizeof(cl_mem),         &buf_src2));
+    CL_CHECK(clSetKernelArg(rk, 2, sizeof(cl_mem),         &buf_src1_reordered));
+    CL_CHECK(clSetKernelArg(rk, 3, sizeof(cl_mem),         &(backend_ctx->prealloc_total_tiles.buffer)));
+    CL_CHECK(clSetKernelArg(rk, 4, sizeof(unsigned int),   &ne00_u));
+    CL_CHECK(clSetKernelArg(rk, 5, sizeof(unsigned short), &map_ratio));
+    CL_CHECK(clSetKernelArg(rk, 6, sizeof(unsigned int),   &tile_u));
+
+    size_t rk_local_size[3]  = {256, 1, 1};
+    size_t rk_global_size[3] = {(size_t)(((ne00 / 8) + 255) / 256 * 256), (size_t)max_post_router_tile * n_tile_size, 1};
+    backend_ctx->enqueue_ndrange_kernel(rk, 3, rk_global_size, rk_local_size, dst);
+
+    // dst as an image
+    region.origin = offsetd;
+    region.size = n_dst * sizeof(float);
+    cl_mem sub_buf_dst = clCreateSubBuffer(dst_data, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+    CL_CHECK(status);
+    cl_image_format image_format_buf_dst = {CL_R, CL_FLOAT};
+    cl_image_desc image_desc_buf_dst = {CL_MEM_OBJECT_IMAGE1D_BUFFER, n_dst, 0,0,0,0,0,0,0, {sub_buf_dst}};
+    cl_mem buf_dst_image = clCreateImage(backend_ctx->context, CL_MEM_WRITE_ONLY, &image_format_buf_dst, &image_desc_buf_dst, NULL, &status);
+    CL_CHECK(status);
+
+    int arg_idx = 0;
+    for (cl_mem w : weights) {
+        CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &w));
+    }
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),  &buf_src1_reordered));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),  &buf_src2));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),  &buf_src2_emap));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),  &buf_dst_image));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),  &(backend_ctx->prealloc_total_tiles.buffer)));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(int),     &ne00));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(int),     &ne01));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_uint), &backend_ctx->adreno_use_moe_ragged));
+    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_uint), &backend_ctx->adreno_moe_ragged_skip_gran));
+
+    // coopmat kernels need a uniform NDRange
+    size_t global_size[3] = {64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile};
+    size_t local_size[3]  = {64, 1, 1};
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_size, local_size, dst);
+
+    clReleaseMemObject(buf_src1_reordered);
+    clReleaseMemObject(sub_buf_dst);
+    clReleaseMemObject(buf_dst_image);
+}
+
 static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 
 // Runs the gate and up matmuls unchanged, then one kernel in place of
@@ -11643,8 +11958,12 @@ static bool adreno_e17_compiler_quirks(const ggml_backend_opencl_context *backen
         backend_ctx->adreno_cl_compiler_version.type != ADRENO_CL_COMPILER_TYPE::E17) {
         return false;
     }
-    const char * env = getenv("GGML_OPENCL_ADRENO_E17_QUIRKS");
-    return !(env && env[0] == '0');
+
+    static const bool enabled = []() {
+        const char * e = getenv("GGML_OPENCL_ADRENO_E17_QUIRKS");
+        return e && e[0] && e[0] != '0';
+    }();
+    return enabled;
 }
 
 static bool ggml_cl_q2_k_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
@@ -12674,7 +12993,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 return true;
             }
 #endif
-            // The E17 compilers segfault while building FA kernels, skip E17 for now
+            // Some E17 compilers crash while building FA kernels.
             if (adreno_e17_compiler_quirks(backend_ctx)) {
                 return false;
             }
@@ -18176,6 +18495,7 @@ static void ggml_backend_opencl_device_get_props(ggml_backend_dev_t dev, struct 
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
         /* .mmap_support          = */ false,
+        /* .fast_async_host_input = */ false,
     };
 }
 
@@ -29446,6 +29766,93 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno_ila(ggml_backend_t backend, const gg
     const int N = ne1;
     const int K = ne00;
 
+    if (backend_ctx->kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8 != nullptr &&
+        N >= 2 && N <= 8 && M > 0 && K > 0 && M % 4 == 0 && K % 256 == 0 &&
+        src0->ne[0] == K && src0->ne[1] == M && dst->ne[1] == N &&
+        K <= INT_MAX / 8 && (int64_t) M * K / 8 <= INT_MAX &&
+        src0->ne[2] == 1 && src0->ne[3] == 1 && src0->view_src == nullptr &&
+        src1->ne[2] == 1 && src1->ne[3] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1 &&
+        ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
+    ) {
+        const int kb = K / 32;
+        const size_t qa_bytes = (size_t)8 * K;
+        const size_t ds_bytes = (size_t)24 * kb * sizeof(cl_half);
+
+        backend_ctx->prealloc_moe_qa.allocate(context, qa_bytes);
+        backend_ctx->prealloc_moe_da.allocate(context, ds_bytes);
+
+        if (ggml_cl_coopk_c8_image(backend_ctx, backend_ctx->prealloc_moe_qa, qa_bytes,
+                                 backend_ctx->coopk_c8_qa_image, backend_ctx->coopk_c8_qa_buffer, backend_ctx->coopk_c8_qa_image_bytes) &&
+            ggml_cl_coopk_c8_image(backend_ctx, backend_ctx->prealloc_moe_da, ds_bytes,
+                                 backend_ctx->coopk_c8_ds_image, backend_ctx->coopk_c8_ds_buffer, backend_ctx->coopk_c8_ds_image_bytes)
+        ) {
+            const int n_blocks = N * kb;
+
+            cl_kernel quant = backend_ctx->kernel_quant_a_q8_1_k4h;
+            CL_CHECK(clSetKernelArg(quant, 0, sizeof(cl_mem), &extra1->data_device));
+            CL_CHECK(clSetKernelArg(quant, 1, sizeof(cl_mem), &backend_ctx->prealloc_moe_qa.buffer));
+            CL_CHECK(clSetKernelArg(quant, 2, sizeof(cl_mem), &backend_ctx->prealloc_moe_da.buffer));
+            CL_CHECK(clSetKernelArg(quant, 3, sizeof(cl_ulong), &offset1));
+            CL_CHECK(clSetKernelArg(quant, 4, sizeof(int), &n_blocks));
+            CL_CHECK(clSetKernelArg(quant, 5, sizeof(int), &kb));
+
+            size_t quant_local[] = {64};
+            size_t quant_global[] = {(size_t)8 * kb};
+            backend_ctx->enqueue_ndrange_kernel(quant, 1, quant_global, quant_local, dst);
+
+            int ksplit = ggml_cl_coopk_ksplit(backend_ctx, CEIL_DIV(M / 4, 64), kb);
+            if (backend_ctx->kernel_gemv_splitk_reduce_f32 == nullptr) {
+                ksplit = 1;
+            }
+
+            cl_mem out = extrad->data_device;
+            cl_ulong out_offset = offsetd;
+
+            if (ksplit > 1) {
+                backend_ctx->prealloc_splitk_partial.allocate(context, (size_t)ksplit * M * N * sizeof(float));
+                out = backend_ctx->prealloc_splitk_partial.buffer;
+                out_offset = 0;
+            }
+
+            const cl_uchar mask_c0 = 0xC0;
+
+            const size_t nsg = backend_ctx->nsg_coopk_dp4a_q6_k_bin_c8;
+            cl_kernel gemm = backend_ctx->kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8;
+
+            CL_CHECK(clSetKernelArg(gemm,  0, sizeof(cl_mem), &extra0_q6_K->ql));
+            CL_CHECK(clSetKernelArg(gemm,  1, sizeof(cl_mem), &extra0_q6_K->qh));
+            CL_CHECK(clSetKernelArg(gemm,  2, sizeof(cl_mem), &extra0_q6_K->s));
+            CL_CHECK(clSetKernelArg(gemm,  3, sizeof(cl_mem), &extra0_q6_K->d));
+            CL_CHECK(clSetKernelArg(gemm,  4, sizeof(cl_mem), &backend_ctx->coopk_c8_qa_image));
+            CL_CHECK(clSetKernelArg(gemm,  5, sizeof(cl_mem), &backend_ctx->coopk_c8_ds_image));
+            CL_CHECK(clSetKernelArg(gemm,  6, sizeof(cl_mem), &out));
+            CL_CHECK(clSetKernelArg(gemm,  7, sizeof(cl_ulong), &out_offset));
+            CL_CHECK(clSetKernelArg(gemm,  8, sizeof(int), &M));
+            CL_CHECK(clSetKernelArg(gemm,  9, sizeof(int), &K));
+            CL_CHECK(clSetKernelArg(gemm, 10, sizeof(int), &N));
+            CL_CHECK(clSetKernelArg(gemm, 11, sizeof(cl_uchar), &mask_c0));
+            CL_CHECK(clSetKernelArg(gemm, 12, sizeof(int), &ksplit));
+
+            size_t local[] = {64, nsg, 1};
+            size_t global[] = {(size_t)CEIL_DIV(M / 4, 64) * 64, nsg * ksplit, 1};
+            backend_ctx->enqueue_ndrange_kernel(gemm, 3, global, local, dst);
+
+            if (ksplit > 1) {
+                const int rows = M * N;
+                cl_kernel reduce = backend_ctx->kernel_gemv_splitk_reduce_f32;
+                CL_CHECK(clSetKernelArg(reduce, 0, sizeof(cl_mem), &out));
+                CL_CHECK(clSetKernelArg(reduce, 1, sizeof(cl_mem), &extrad->data_device));
+                CL_CHECK(clSetKernelArg(reduce, 2, sizeof(cl_ulong), &offsetd));
+                CL_CHECK(clSetKernelArg(reduce, 3, sizeof(int), &rows));
+                CL_CHECK(clSetKernelArg(reduce, 4, sizeof(int), &ksplit));
+                size_t reduce_local[] = {64};
+                size_t reduce_global[] = {(size_t)CEIL_DIV(rows, 64) * 64};
+                backend_ctx->enqueue_ndrange_kernel(reduce, 1, reduce_global, reduce_local, dst);
+            }
+            return;
+        }
+    }
+
     if (ne1 == 1) {
         cl_mem b_sub_buf  = nullptr;
         cl_mem b_img      = nullptr;
@@ -36510,6 +36917,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
 
+                    // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
+                    {
+                        static const char * q4_0_moe_coopmat_env = getenv("GGML_OPENCL_Q4_0_MOE_COOPMAT");
+                        if (!use_moe_dp4a && (q4_0_moe_coopmat_env ? (atoi(q4_0_moe_coopmat_env) != 0) : true) &&
+                                backend_ctx->kernel_gemm_moe_q4_0_f32_ns_coopmat != nullptr) {
+                            unsigned short cp_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((cp_map_ratio == 1) || (cp_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_coopmat(backend_ctx, backend_ctx->kernel_gemm_moe_q4_0_f32_ns_coopmat,
+                                    { extra0_q4_0->q_img, extra0_q4_0->d },
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, cp_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     if (!use_moe_dp4a) {
                         // Create image for reordered src1
                         // Use pre-allocated placeholder
@@ -36796,6 +37221,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                     CL_CHECK(status);
 
+                    // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
+                    {
+                        static const char * q4_1_moe_coopmat_env = getenv("GGML_OPENCL_Q4_1_MOE_COOPMAT");
+                        if ((q4_1_moe_coopmat_env ? (atoi(q4_1_moe_coopmat_env) != 0) : true) &&
+                                backend_ctx->kernel_gemm_moe_q4_1_f32_ns_coopmat != nullptr) {
+                            unsigned short cp_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((cp_map_ratio == 1) || (cp_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_coopmat(backend_ctx, backend_ctx->kernel_gemm_moe_q4_1_f32_ns_coopmat,
+                                    { extra0_q4_1->q_img, extra0_q4_1->d, extra0_q4_1->m },
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, cp_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // Create image for reordered src1
                     // Use pre-allocated placeholder
                     region.origin = 0;
@@ -37057,6 +37500,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         }
                     }
 
+                    // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
+                    {
+                        static const char * q5_0_moe_coopmat_env = getenv("GGML_OPENCL_Q5_0_MOE_COOPMAT");
+                        if ((q5_0_moe_coopmat_env ? (atoi(q5_0_moe_coopmat_env) != 0) : true) &&
+                                backend_ctx->kernel_gemm_moe_q5_0_f32_ns_coopmat != nullptr) {
+                            unsigned short cp_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((cp_map_ratio == 1) || (cp_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_coopmat(backend_ctx, backend_ctx->kernel_gemm_moe_q5_0_f32_ns_coopmat,
+                                    { extra0_q5_0->qs_img, extra0_q5_0->qh, extra0_q5_0->d },
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, cp_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // Create image for reordered src1
                     // Use pre-allocated placeholder
                     region.origin = 0;
@@ -37237,6 +37698,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     region.size = ne10 * ne11 * ne12 * sizeof(float);
                     sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                     CL_CHECK(status);
+
+                    // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
+                    {
+                        static const char * q5_1_moe_coopmat_env = getenv("GGML_OPENCL_Q5_1_MOE_COOPMAT");
+                        if ((q5_1_moe_coopmat_env ? (atoi(q5_1_moe_coopmat_env) != 0) : true) &&
+                                backend_ctx->kernel_gemm_moe_q5_1_f32_ns_coopmat != nullptr) {
+                            unsigned short cp_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((cp_map_ratio == 1) || (cp_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_coopmat(backend_ctx, backend_ctx->kernel_gemm_moe_q5_1_f32_ns_coopmat,
+                                    { extra0_q5_1->qs_img, extra0_q5_1->qh, extra0_q5_1->d, extra0_q5_1->m },
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, cp_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
 
                     // Create image for reordered src1
                     // Use pre-allocated placeholder
@@ -37704,6 +38183,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
 
+                    // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
+                    {
+                        static const char * q4_k_moe_coopmat_env = getenv("GGML_OPENCL_Q4K_MOE_COOPMAT");
+                        if (!use_moe_dp4a && (q4_k_moe_coopmat_env ? (atoi(q4_k_moe_coopmat_env) != 0) : true) &&
+                                backend_ctx->kernel_gemm_moe_q4_k_f32_ns_coopmat != nullptr) {
+                            unsigned short cp_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((cp_map_ratio == 1) || (cp_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_coopmat(backend_ctx, backend_ctx->kernel_gemm_moe_q4_k_f32_ns_coopmat,
+                                    { extra0_q4_K->q_img, extra0_q4_K->d, extra0_q4_K->dm, extra0_q4_K->s },
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, cp_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     if (!use_moe_dp4a) {
                         // Create image for reordered src1
                         region.origin = 0;
@@ -38025,6 +38522,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         }
                     }
 
+                    // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
+                    {
+                        static const char * q5_k_moe_coopmat_env = getenv("GGML_OPENCL_Q5K_MOE_COOPMAT");
+                        if ((q5_k_moe_coopmat_env ? (atoi(q5_k_moe_coopmat_env) != 0) : true) &&
+                                backend_ctx->kernel_gemm_moe_q5_k_f32_ns_coopmat != nullptr) {
+                            unsigned short cp_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((cp_map_ratio == 1) || (cp_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_coopmat(backend_ctx, backend_ctx->kernel_gemm_moe_q5_k_f32_ns_coopmat,
+                                    { extra0_q5_K->q_img, extra0_q5_K->qh, extra0_q5_K->s, extra0_q5_K->d, extra0_q5_K->dm },
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, cp_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // Create image for reordered src1
                     // Use pre-allocated placeholder
                     region.origin = 0;
@@ -38226,6 +38741,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
+
+                    // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
+                    {
+                        static const char * q6_k_moe_coopmat_env = getenv("GGML_OPENCL_Q6K_MOE_COOPMAT");
+                        if (!use_moe_dp4a && (q6_k_moe_coopmat_env ? (atoi(q6_k_moe_coopmat_env) != 0) : true) &&
+                                backend_ctx->kernel_gemm_moe_q6_k_f32_ns_coopmat != nullptr) {
+                            unsigned short cp_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((cp_map_ratio == 1) || (cp_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_coopmat(backend_ctx, backend_ctx->kernel_gemm_moe_q6_k_f32_ns_coopmat,
+                                    { extra0_q6_K->ql_img, extra0_q6_K->qh, extra0_q6_K->s, extra0_q6_K->d },
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, cp_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
 
                     if (!use_moe_dp4a) {
                         // Create image for reordered src1
@@ -38478,6 +39011,15 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin == nullptr;
                     }
 
+                    // Priority on A850: coopmat (fp16) > bin kernel > Adreno clc. The dp4a path is chosen by GGML_OPENCL_MXFP4_MOE_DP4A and has its own priority.
+                    static const char * mxfp4_moe_coopmat_env = getenv("GGML_OPENCL_MXFP4_MOE_COOPMAT");
+                    const bool use_moe_coopmat = !use_moe_dp4a &&
+                                                 (mxfp4_moe_coopmat_env ? (atoi(mxfp4_moe_coopmat_env) != 0) : true) &&
+                                                 backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_coopmat != nullptr;
+                    if (use_moe_coopmat) {
+                        kernel = backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_coopmat;
+                    }
+
                     cl_buffer_region region;
                     region.origin = 0;
                     region.size = sizeof(int) * max_post_router_tile * n_tile_size;
@@ -38500,7 +39042,32 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
 
-                    if (!use_moe_dp4a) {
+                    if (use_moe_coopmat) {
+                        // f16 reordered activations, read by the coopmat kernel as a buffer
+                        region.origin = 0;
+                        region.size = ne00 * max_post_router_tile * n_tile_size * sizeof(cl_half);
+                        backend_ctx->prealloc_act_trans.allocate(backend_ctx->context, region.size);
+                        buf_src1_reordered = clCreateSubBuffer(
+                            backend_ctx->prealloc_act_trans.buffer,
+                            0,
+                            CL_BUFFER_CREATE_TYPE_REGION,
+                            &region,
+                            &status);
+                        CL_CHECK(status);
+
+                        cl_kernel rk = backend_ctx->kernel_moe_reorder_b_f16;
+                        CL_CHECK(clSetKernelArg(rk, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
+                        CL_CHECK(clSetKernelArg(rk, 1, sizeof(cl_mem),         &buf_src2));
+                        CL_CHECK(clSetKernelArg(rk, 2, sizeof(cl_mem),         &buf_src1_reordered));
+                        CL_CHECK(clSetKernelArg(rk, 3, sizeof(cl_mem),         &(backend_ctx->prealloc_total_tiles.buffer)));
+                        CL_CHECK(clSetKernelArg(rk, 4, sizeof(unsigned int),   &ne00));
+                        CL_CHECK(clSetKernelArg(rk, 5, sizeof(unsigned short), &map_ratio));
+                        CL_CHECK(clSetKernelArg(rk, 6, sizeof(unsigned int),   &n_tile_size));
+
+                        size_t rk_local_size[3]  = {256, 1, 1};
+                        size_t rk_global_size[3] = {static_cast<size_t>(((ne00 / 8) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
+                        backend_ctx->enqueue_ndrange_kernel(rk, 3, rk_global_size, rk_local_size, dst);
+                    } else if (!use_moe_dp4a) {
                         // Create image for reordered src1
                         // Use pre-allocated placeholder
                         region.origin = 0;
@@ -38644,7 +39211,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     int arg_idx = 0;
                     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_mxfp4->q_img));
                     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_mxfp4->e));
-                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &image_src1_reordered));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    use_moe_coopmat ? &buf_src1_reordered : &image_src1_reordered));
                     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_src2));
                     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_src2_emap));
                     CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_dst_image));
@@ -38665,7 +39232,9 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                     clReleaseMemObject(sub_buf_src1_pre);
                     clReleaseMemObject(buf_src1_reordered);
-                    clReleaseMemObject(image_src1_reordered);
+                    if (image_src1_reordered) {
+                        clReleaseMemObject(image_src1_reordered);
+                    }
                     clReleaseMemObject(buf_src2);
                     clReleaseMemObject(buf_src2_emap);
                     clReleaseMemObject(sub_buf_dst);
@@ -40523,6 +41092,9 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     const cl_uint sq1 = (cl_uint)(src_q->nb[1]    / sizeof(float));
     const cl_uint sq2 = (cl_uint)(src_q->nb[2]    / sizeof(float));
     const cl_uint sq3 = (cl_uint)(src_q->nb[3]    / sizeof(float));
+    const cl_uint sk1 = (cl_uint)(src_k->nb[1]    / sizeof(float));
+    const cl_uint sk2 = (cl_uint)(src_k->nb[2]    / sizeof(float));
+    const cl_uint sk3 = (cl_uint)(src_k->nb[3]    / sizeof(float));
     const cl_uint sv1 = (cl_uint)(src_v->nb[1]    / sizeof(float));
     const cl_uint sv2 = (cl_uint)(src_v->nb[2]    / sizeof(float));
     const cl_uint sv3 = (cl_uint)(src_v->nb[3]    / sizeof(float));
@@ -40573,6 +41145,9 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sq1));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sq2));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sq3));
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sk1));
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sk2));
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sk3));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sv1));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sv2));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sv3));

@@ -169,8 +169,8 @@ enum llm_arch {
     LLM_ARCH_MAION_CODER,
     LLM_ARCH_KIMI_LINEAR,
     LLM_ARCH_KIMI_K3,
-    LLM_ARCH_RAON1,
     LLM_ARCH_KIMI_K31,
+    LLM_ARCH_RAON1_MINI,
     LLM_ARCH_GLM5_NEXT,
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
@@ -505,6 +505,7 @@ enum llm_kv {
     LLM_KV_DFLASH_SELECTOR_RANK,
     LLM_KV_DFLASH_SELECTOR_TOP_K,
     LLM_KV_DFLASH_DECODER_ARCH,
+    LLM_KV_DFLASH_HAS_MARKOV_CONTEXT,
     LLM_KV_LILICORR_HIDDEN_SIZE,
     LLM_KV_LILICORR_CANDIDATE_TOPK,
     LLM_KV_LILICORR_NUM_HEADS,
@@ -720,7 +721,7 @@ enum llm_tensor {
     LLM_TENSOR_SSM_F_A,             // kimi: forget gate projection A
     LLM_TENSOR_SSM_F_B,             // kimi: forget gate projection B
     LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient and qwen3.5
-    LLM_TENSOR_SSM_RDA,             // raon1: write gate offset
+    LLM_TENSOR_SSM_RDA,             // raon1_mini: write gate offset
     LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
     LLM_TENSOR_SSM_G,               // kimi-k3: full-rank KDA gate
@@ -932,6 +933,8 @@ enum llm_tensor {
     LLM_TENSOR_DSPARK_CONF_PROJ,
     LLM_TENSOR_DSPARK_JOINT_PROJ,
     LLM_TENSOR_DSPARK_MASK_EMBD,
+    LLM_TENSOR_DSPARK_MARKOV_CTX_MIX,
+    LLM_TENSOR_DSPARK_MARKOV_CTX_NORM,
     LLM_TENSOR_ENGRAM_KV,
     LLM_TENSOR_ENGRAM_GATE,
     LLM_TENSOR_ENGRAM_KV_B,          // hy_v4_flash: bias on the fused key/value projections
@@ -946,6 +949,11 @@ enum llm_tensor {
     LLM_TENSOR_DFLASH_SELECTOR_NEXT,
     LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
     LLM_TENSOR_ENC_AUX_NORM,
+    LLM_TENSOR_DFLASH_CTX_MIX,
+    LLM_TENSOR_DFLASH_CTX_NORM,
+    LLM_TENSOR_DFLASH_ATTN_K_CTX,
+    LLM_TENSOR_DFLASH_ATTN_V_CTX,
+    LLM_TENSOR_DFLASH_ATTN_K_CTX_NORM,
     LLM_TENSOR_LILICORR_TOKEN_PROJ,
     LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,
     LLM_TENSOR_LILICORR_SLOT_EMBD,

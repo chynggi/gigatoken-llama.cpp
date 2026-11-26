@@ -160,3 +160,6 @@ AGENTS.local.md
 /calibration_data.txt
 /gemma4.imatrix
 /quantize_pipeline.sh
+
+# local build ui
+tools/ui/

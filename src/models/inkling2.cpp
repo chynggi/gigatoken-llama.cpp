@@ -221,8 +221,8 @@ ggml_tensor * llama_model_inkling2::graph::convolve(
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
     const int64_t n_seqs       = ubatch.n_seqs;
 
+    // add the taps input first and the result right after the state store, so the conv ops are consecutive and backends can fuse them
     if (dynamic) {
-        // the taps first, so that the convolution stays one run of nodes
         ggml_build_forward_expand(gf, dynamic);
     }
 
@@ -256,8 +256,6 @@ ggml_tensor * llama_model_inkling2::graph::convolve(
     }
 
     out = ggml_scale(ctx0, ggml_add(ctx0, cur, out), 1.0f/sqrtf((dynamic ? 2 : 1)*n_conv + 1));
-
-    // right after the state store, so that the convolution is one run of nodes that backends can fuse
     ggml_build_forward_expand(gf, out);
 
     return out;
@@ -296,6 +294,7 @@ ggml_tensor * llama_model_inkling2::graph::build_inputs() {
     tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, inp_pos, GGML_TYPE_F32), 1.0f, 1.0f);
     tau = ggml_log(ctx0, ggml_clamp(ctx0, ggml_scale(ctx0, tau, 1.0f/hparams.n_log_scale_floor), 1.0f, INFINITY));
     tau = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, tau, hparams.f_log_scale_alpha, 1.0f), 1, 1, n_tokens);
+    ggml_build_forward_expand(gf, tau);
 
     ggml_tensor * cur = build_inp_embd(model.tok_embd);
 
@@ -415,8 +414,7 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
         blocks.push_back(inpSA);
     } else {
         cur = ggml_add(ctx0, inpSA, cur);
-        // right after the convolution, so that backends can fuse the residual into it
-        ggml_build_forward_expand(gf, cur);
+        ggml_build_forward_expand(gf, cur); // right after the conv, so backends can fuse the add into it
     }
 
     ggml_tensor * ffn_inp = cur;

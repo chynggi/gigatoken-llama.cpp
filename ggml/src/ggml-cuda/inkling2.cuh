@@ -2,36 +2,54 @@
 
 #include "common.cuh"
 
-// Fusions of the glue op chains of Inkling 2 (inkling2, inkling2_loop). The looped model runs these small chains
-// 48 times per token, so at batch size 1 the launches, not the memory traffic, dominate them.
-enum ggml_cuda_inkling2_fusion {
-    GGML_CUDA_INKLING2_NONE,
-    GGML_CUDA_INKLING2_CLIP,       // [MUL] SQR SUM_ROWS SQRT SCALE FILL DIV CLAMP MUL  : row L2 clip
-    GGML_CUDA_INKLING2_CONV,       // SSM_CONV RESHAPE ADD SCALE [ADD]                  : short conv + residuals
-    GGML_CUDA_INKLING2_SITU,       // [REPEAT GET_ROWS] MUL VIEW SCALE TANH ... MUL     : SiTU of the expert gate/up
-    GGML_CUDA_INKLING2_MIX,        // RMS_NORM CONCAT TRANSPOSE CONT ... MUL_MAT        : attention over depth
-    GGML_CUDA_INKLING2_CTRL_DOWN,  // RMS_NORM RMS_NORM CONCAT MUL_MAT                  : loop controller input
-    GGML_CUDA_INKLING2_CTRL_OUT,   // MUL_MAT MUL_MAT TANH MUL SUB TANH MUL ADD         : loop controller output
-    GGML_CUDA_INKLING2_RELBIAS,    // SUB PERMUTE CONT GET_ROWS RESHAPE ... ADD [CPY]   : relative-position bias mask
-    GGML_CUDA_INKLING2_CONV_STATE, // CONCAT VIEW VIEW CPY SSM_CONV ... SCALE [ADD]     : short conv + state store
-    GGML_CUDA_INKLING2_CONV_DYN,   // CONV_STATE with per-head input-dependent taps     : full-attention K/V conv
-    GGML_CUDA_INKLING2_CTRL_NORM,  // RMS_NORM RMS_NORM CONCAT                          : controller input, large batches
-    GGML_CUDA_INKLING2_CTRL_TAIL,  // TANH MUL SUB TANH MUL ADD                         : controller output, large batches
+// fused op chains of the Inkling 2 graph
+
+// largest conv width and stack depth the fused kernels handle
+#define GGML_CUDA_SHORT_CONV_MAX_K   8
+#define GGML_CUDA_DEPTH_MIX_MAX_ROWS 16
+
+// the most tokens the fused loop controller handles, larger batches use the matrix multiplications
+#define GGML_CUDA_LOOP_CTRL_MAX_TOKENS 8
+
+// situ(g, u) = (s1*tanh(s0*g + b0) + b1)*sigmoid(g)*(s3*tanh(s2*u + b2) + b3), with s and b of the four SCALE nodes
+void ggml_cuda_op_situ(ggml_backend_cuda_context & ctx, const ggml_tensor * gate, const ggml_tensor * up,
+        const float * s, const float * b, ggml_tensor * dst);
+
+// causal short conv: x = [past; cur^T], y = conv(x, w) (+ input-dependent taps per head), dst = s*(cur + y) + b (+ res)
+// the K - 1 columns of x that end at token Ts - 1 - slot are the conv state of slot, for the last kw slots (kw = 1 without rollback)
+// each thread does `run` tokens of a sequence in order, run == Ts lets dst be cur
+struct ggml_cuda_short_conv_args {
+    const float * past;    // [K - 1, C, S], strides in elements
+    int64_t       past_s1;
+    int64_t       past_s2;
+    const float * cur;     // [C, Ts*S], contiguous
+    const float * w;       // [K, C], contiguous
+    const float * dyn;     // [K*H, Ts*S] taps or nullptr
+    int64_t       dyn_s1;
+    int           n_heads;
+    const float * res;     // [C, Ts*S], contiguous, or nullptr
+    float       * dst;     // [C, Ts*S], contiguous
+    float       * state;    // [K - 1, slot, C, S], strides in elements
+    int64_t       state_slot_s;
+    int64_t       state_ch_s;
+    int64_t       state_seq_s;
+    int           kw;
+    int           run;
+    int           C;
+    int           K;
+    int           Ts;
+    int           S;
+    float         scale;
+    float         bias;
 };
 
-struct ggml_cuda_inkling2_args {
-    ggml_cuda_inkling2_fusion type = GGML_CUDA_INKLING2_NONE;
+void ggml_cuda_op_short_conv(ggml_backend_cuda_context & ctx, const ggml_cuda_short_conv_args & args);
 
-    int n_nodes = 0; // the number of graph nodes the fusion replaces, starting at the matched node
+// depth mix: states = [stack; rms_norm(cur)], p = softmax(scale*(states . query)), dst = p . states, written as [Q, n, T]
+// norm_cur false: cur is already normalized
+void ggml_cuda_op_depth_mix(ggml_backend_cuda_context & ctx, const ggml_tensor * stack, const ggml_tensor * cur,
+        bool norm_cur, float eps, const ggml_tensor * query, float scale, ggml_tensor * dst);
 
-    ggml_tensor * dst = nullptr; // the output, the last node of the chain
-
-    const ggml_tensor * src[4]  = {}; // the inputs of the chain
-    const ggml_tensor * node[6] = {}; // further tensors of the chain: op parameters, views, intermediates
-};
-
-// match one of the chains at node i of cgraph
-bool ggml_cuda_inkling2_match(const ggml_cgraph * cgraph, int i, ggml_cuda_inkling2_args & args);
-
-// run the fused kernel of a match
-void ggml_cuda_inkling2_fused(ggml_backend_cuda_context & ctx, const ggml_cuda_inkling2_args & args);
+// loop controller: gate = w_down . [rms_norm(cur); rms_norm(msg)], dst = cur - tanh(w_forget . gate)*cur + tanh(w_gain . gate)*msg
+void ggml_cuda_op_loop_ctrl(ggml_backend_cuda_context & ctx, const ggml_tensor * cur, const ggml_tensor * msg, float eps,
+        const ggml_tensor * w_down, const ggml_tensor * w_gain, const ggml_tensor * w_forget, ggml_tensor * gate, ggml_tensor * dst);

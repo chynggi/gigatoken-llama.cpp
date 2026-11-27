@@ -259,10 +259,6 @@
 		}
 	}
 
-	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
-		await chatStore.addSystemPrompt(draft);
-	}
-
 	$effect(() => {
 		stick.setEnabled(!settingsStore.config.disableAutoScroll);
 	});
@@ -338,7 +334,7 @@
 			class={[
 				// moves between the centered and bottom positions with a fade (see moveForm), at
 				// the same height in the page, so the messages never shift
-				'pointer-events-none md:sticky fixed mt-auto max-md:z-10',
+				'group/chat-form-host pointer-events-none md:sticky fixed mt-auto max-md:z-10',
 				// a phone holds it in place on screen while the page is slid aside
 				deviceStore.isMobile && 'sidebar-reveal-pin-bottom',
 				// on a phone the expanded form is a sheet: flush with the screen's sides and bottom
@@ -359,6 +355,7 @@
 				!isFormMoving &&
 					'transition-[left,right,bottom] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] max-md:transition-none motion-reduce:transition-none'
 			]}
+			data-chat-form-lifted={isFormLifted || undefined}
 		>
 			<ChatScreenGreeting
 				faded={uiStore.isComposerExpanded}
@@ -390,7 +387,6 @@
 				onFileUpload={fileUpload.handleFileUpload}
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
-				onSystemPromptAdd={handleSystemPromptAdd}
 			/>
 		</div>
 	</div>

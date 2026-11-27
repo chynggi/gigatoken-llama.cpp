@@ -323,6 +323,7 @@ struct llama_hparams {
     // default Qwen3-style block (fused QKV, softplus output gate, per-layer-type RoPE)
     // is selected by the `decoder_arch` key -- see llama_model_dflash::load_arch_hparams.
     bool     dflash_decoder_laguna   = false;
+    bool     dflash_softcap_post     = false; // DFlash2 softcaps the selector scores instead of the logits
     bool     dspark_f_rnn            = false; // rnn markov head reads f_rnn from embd_state
     uint32_t lilicorr_hidden_size    = 0;
     uint32_t lilicorr_candidate_topk = 0;
